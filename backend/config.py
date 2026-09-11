@@ -6,7 +6,7 @@ load_dotenv()
 class Config:
     FLASK_ENV = os.getenv('FLASK_ENV', 'development')
     DEBUG = FLASK_ENV == 'development'
-    SECRET_KEY = os.getenv('SECRET_KEY', 'agrisaathi-system1-dev-secret-key-2026')
+    SECRET_KEY = os.getenv('SECRET_KEY', 'agrisaathi-unified-dev-secret-key-2026')
     
     # Database configuration
     DB_USER = os.getenv('DATABASE_USER', 'root')

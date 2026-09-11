@@ -821,10 +821,7 @@ function App() {
               >
                 <div style={{ fontSize: '0.9rem', color: 'var(--slate-700)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <p>
-                    <strong>Steps 15, 16, 17 & 18 Completed:</strong> Farmer-Facing Storage Discovery & Booking Inquiries (Cold Storages, Chawls, Tariffs) and Buyer Offers Negotiation Flow (Review, Accept & Transition to Reserved, Counter-offer, and Decline).
-                  </p>
-                  <p>
-                    Next upcoming step: <strong>Step 19 & 20: FPO Produce Aggregation UI & Final System 1 Polish</strong>.
+                    <strong>AgriSaathi Platform Status:</strong> Fully unified application. All stakeholder portals (Farmer, FPO, Wholesale Buyer, Cold Storage Warehouse, Government Admin), two-way trade negotiations, Government Escrow payments, and dispute redressal are operational.
                   </p>
                 </div>
               </Modal>
