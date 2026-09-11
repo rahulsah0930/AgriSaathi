@@ -49,7 +49,7 @@ def register_farmer():
             phone=phone,
             email=email,
             role='FARMER',
-            verification_status='VERIFIED'
+            verification_status='PENDING'
         )
         user.set_password(data['password'])
         db.session.add(user)
@@ -124,7 +124,7 @@ def register_fpo():
             phone=phone,
             email=email,
             role='FPO',
-            verification_status='VERIFIED'
+            verification_status='PENDING'
         )
         user.set_password(data['password'])
         db.session.add(user)
@@ -277,7 +277,7 @@ def register_warehouse():
             phone=phone,
             email=email,
             role='WAREHOUSE',
-            verification_status='VERIFIED'
+            verification_status='PENDING'
         )
         user.set_password(data['password'])
         db.session.add(user)
@@ -319,10 +319,10 @@ def register_warehouse():
         )
         db.session.add(wh_profile)
 
-        # Also insert directly into Warehouse table for immediate Discovery by Farmers and FPOs
+        # Also insert directly into Warehouse table with PENDING status awaiting government inspection
         warehouse_entry = Warehouse(
             name=data['warehouse_name'].strip(),
-            verification_status='VERIFIED',
+            verification_status='PENDING',
             district=data['district'].strip(),
             location=data.get('address') or f"{data['district'].strip()} Agro Logistics Hub",
             storage_type=mapped_storage_type,
@@ -338,7 +338,7 @@ def register_warehouse():
 
         return jsonify({
             'success': True,
-            'message': 'Warehouse facility registered and active for farmer/FPO cold storage discovery.',
+            'message': 'Cold storage facility registered and submitted for Government Verification.',
             'user': user.to_dict(),
             'warehouse': warehouse_entry.to_dict()
         }), 201

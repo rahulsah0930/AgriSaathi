@@ -282,30 +282,50 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px', flexWrap: 'wrap' }}>
               <ShoppingCart size={24} color="#93c5fd" />
               <h1 style={{ fontSize: '1.6rem', fontWeight: 800, margin: 0 }}>Wholesale Buyer Portal</h1>
-              <button
-                type="button"
-                onClick={() => setGovCertModalOpen(true)}
-                style={{
-                  cursor: 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  backgroundColor: '#059669',
-                  color: '#ffffff',
-                  fontSize: '0.78rem',
-                  fontWeight: 700,
-                  padding: '4px 12px',
-                  borderRadius: '20px',
-                  boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-                  border: '1px solid #34d399',
-                  transition: 'all 0.2s ease',
-                }}
-                title="Click to view Official Government MSAMB Accreditation Certificate"
-              >
-                <ShieldCheck size={15} color="#a7f3d0" />
-                <span>Govt Verified Buyer</span>
-                <ExternalLink size={12} color="#a7f3d0" />
-              </button>
+              {user?.verification_status === 'PENDING' ? (
+                <span
+                  style={{
+                    backgroundColor: 'rgba(251, 191, 36, 0.25)',
+                    color: '#fef08a',
+                    border: '1px solid rgba(251, 191, 36, 0.5)',
+                    padding: '3px 12px',
+                    borderRadius: '20px',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                  }}
+                >
+                  <Clock size={14} color="#fef08a" />
+                  <span>Pending Govt Verification</span>
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setGovCertModalOpen(true)}
+                  style={{
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    backgroundColor: '#059669',
+                    color: '#ffffff',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    padding: '4px 12px',
+                    borderRadius: '20px',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+                    border: '1px solid #34d399',
+                    transition: 'all 0.2s ease',
+                  }}
+                  title="Click to view Official Government MSAMB Accreditation Certificate"
+                >
+                  <ShieldCheck size={15} color="#a7f3d0" />
+                  <span>Govt Verified Buyer</span>
+                  <ExternalLink size={12} color="#a7f3d0" />
+                </button>
+              )}
             </div>
             <p style={{ color: '#bfdbfe', margin: 0, fontSize: '0.9rem' }}>
               {user?.profile?.company_name || user?.name || 'Mahalaxmi Agro Wholesale & Retail Pvt. Ltd.'} • GSTIN: {user?.profile?.gst_number || '27AAACM1234F1Z5'} • MSAMB Direct Purchase Exemption #MH-8842
@@ -367,6 +387,36 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
           </div>
         </div>
       </div>
+
+      {/* Pending Verification Notice */}
+      {user?.verification_status === 'PENDING' && (
+        <div
+          style={{
+            backgroundColor: 'var(--status-warning-bg)',
+            border: '1px solid var(--status-warning-border)',
+            borderRadius: 'var(--radius-md)',
+            padding: '12px 18px',
+            marginBottom: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <Clock size={20} color="var(--status-warning-text)" />
+            <div>
+              <div style={{ fontWeight: 700, color: 'var(--status-warning-text)', fontSize: '0.9rem' }}>
+                Wholesale Buyer Account Pending Government Verification
+              </div>
+              <div style={{ fontSize: '0.82rem', color: 'var(--slate-700)', marginTop: '2px' }}>
+                Your corporate registration, GSTIN, and escrow-linked bank credentials have been submitted for validation in the Government Admin Verification Portal.
+              </div>
+            </div>
+          </div>
+          <Badge variant="warning">AWAITING APPROVAL</Badge>
+        </div>
+      )}
 
       {banner && (
         <div

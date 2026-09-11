@@ -636,6 +636,9 @@ export const AdminDashboard = ({ user, onNavigate, onLogout }) => {
                     <div><strong>Representative:</strong> {prof.contact_person || 'Anand Rao Deshmukh'}</div>
                     <div><strong>Member Farmer Count:</strong> {prof.member_count || 450} Farmers</div>
                     <div><strong>Crops Aggregated:</strong> {prof.primary_crops || 'Tomato, Onion'}</div>
+                    <div><strong>Representative Aadhaar:</strong> {prof.aadhaar_masked || 'XXXX XXXX 6721'}</div>
+                    <div><strong>Bank Account:</strong> {prof.bank_account_masked || 'XXXXXX4419'} ({prof.bank_name || 'Bank of Maharashtra'}, IFSC: {prof.ifsc_code_masked || 'MAHB0000123'})</div>
+                    {prof.account_holder_name && <div><strong>Account Holder:</strong> {prof.account_holder_name}</div>}
                   </div>
                 )}
 
@@ -648,6 +651,9 @@ export const AdminDashboard = ({ user, onNavigate, onLogout }) => {
                     <div><strong>GSTIN:</strong> {prof.gst_number || '27AAACM1234F1Z5'}</div>
                     <div><strong>CIN / Reg:</strong> {prof.business_registration || 'CIN: U01409MH2021PTC355201'}</div>
                     <div><strong>Delivery Depot:</strong> {prof.address}</div>
+                    <div><strong>Signatory Aadhaar:</strong> {prof.aadhaar_masked || 'XXXX XXXX 8834'}</div>
+                    <div><strong>Escrow Linked Bank Account:</strong> {prof.bank_account_masked || 'XXXXXX7720'} ({prof.bank_name || 'HDFC Bank'}, IFSC: {prof.ifsc_code_masked || 'HDFC0001234'})</div>
+                    {prof.account_holder_name && <div><strong>Account Holder:</strong> {prof.account_holder_name}</div>}
                   </div>
                 )}
 
@@ -660,6 +666,9 @@ export const AdminDashboard = ({ user, onNavigate, onLogout }) => {
                     <div><strong>Storage Capacity:</strong> {prof.capacity_mt || 2500} MT</div>
                     <div><strong>Tariff:</strong> ₹{prof.tariff_per_quintal_month || 55}/Quintal/Month</div>
                     <div><strong>Current Ambient Temp:</strong> {prof.temperature_celsius || 2.8}°C</div>
+                    <div><strong>Operator Aadhaar:</strong> {prof.aadhaar_masked || 'XXXX XXXX 3390'}</div>
+                    <div><strong>Payout Bank Account:</strong> {prof.bank_account_masked || 'XXXXXX9912'} ({prof.bank_name || 'Bank of Maharashtra'}, IFSC: {prof.ifsc_code_masked || 'MAHB0000456'})</div>
+                    {prof.account_holder_name && <div><strong>Account Holder:</strong> {prof.account_holder_name}</div>}
                   </div>
                 )}
 

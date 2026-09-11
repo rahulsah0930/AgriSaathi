@@ -26,9 +26,13 @@ def list_warehouses():
                 tariff = float(p.tariff_per_quintal_month or 55.0)
                 price_day = round(tariff / (100.0 * 30.0), 4)
 
+                user_v_status = 'PENDING'
+                if getattr(p, 'user', None) and p.user.verification_status:
+                    user_v_status = p.user.verification_status
+
                 sync_wh = Warehouse(
                     name=p.warehouse_name.strip(),
-                    verification_status='VERIFIED',
+                    verification_status=user_v_status,
                     district=p.district.strip() if p.district else 'Nashik',
                     location=p.address.strip() if p.address else f"{p.district or 'Nashik'} Agro Hub",
                     storage_type=mapped,
@@ -111,7 +115,7 @@ def create_warehouse():
 
         new_wh = Warehouse(
             name=name.strip(),
-            verification_status='VERIFIED',
+            verification_status='PENDING',
             district=district,
             location=location.strip(),
             storage_type=storage_type,

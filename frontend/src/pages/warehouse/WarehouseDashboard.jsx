@@ -488,9 +488,9 @@ export const WarehouseDashboard = ({ user, onNavigate, onLogout }) => {
               </h1>
               <span
                 style={{
-                  backgroundColor: 'rgba(167, 243, 208, 0.22)',
-                  color: '#a7f3d0',
-                  border: '1px solid rgba(167, 243, 208, 0.4)',
+                  backgroundColor: user?.verification_status === 'PENDING' ? 'rgba(251, 191, 36, 0.25)' : 'rgba(167, 243, 208, 0.22)',
+                  color: user?.verification_status === 'PENDING' ? '#fde047' : '#a7f3d0',
+                  border: user?.verification_status === 'PENDING' ? '1px solid rgba(251, 191, 36, 0.5)' : '1px solid rgba(167, 243, 208, 0.4)',
                   padding: '3px 10px',
                   borderRadius: '16px',
                   fontSize: '0.78rem',
@@ -500,7 +500,11 @@ export const WarehouseDashboard = ({ user, onNavigate, onLogout }) => {
                   gap: '4px',
                 }}
               >
-                <ShieldCheck size={14} /> {profileData.wdraLicense}
+                {user?.verification_status === 'PENDING' ? (
+                  <>⏳ Pending Govt Verification</>
+                ) : (
+                  <><ShieldCheck size={14} /> {profileData.wdraLicense || 'WDRA Verified'}</>
+                )}
               </span>
             </div>
             <p style={{ color: '#d1fae5', margin: 0, fontSize: '0.92rem', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
@@ -572,6 +576,36 @@ export const WarehouseDashboard = ({ user, onNavigate, onLogout }) => {
           </div>
         </div>
       </div>
+
+      {/* Pending Verification Notice */}
+      {user?.verification_status === 'PENDING' && (
+        <div
+          style={{
+            backgroundColor: 'var(--status-warning-bg)',
+            border: '1px solid var(--status-warning-border)',
+            borderRadius: 'var(--radius-md)',
+            padding: '12px 18px',
+            marginBottom: '16px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '12px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <Clock size={20} color="var(--status-warning-text)" />
+            <div>
+              <div style={{ fontWeight: 700, color: 'var(--status-warning-text)', fontSize: '0.9rem' }}>
+                Cold Storage Facility Accreditation Pending Government Verification
+              </div>
+              <div style={{ fontSize: '0.82rem', color: 'var(--slate-700)', marginTop: '2px' }}>
+                Your facility details, WDRA license, and bank payout coordinates have been submitted to the Maharashtra State Agriculture Department (Government Admin Verification Portal).
+              </div>
+            </div>
+          </div>
+          <Badge variant="warning">AWAITING APPROVAL</Badge>
+        </div>
+      )}
 
       {/* Alert Banners */}
       {banner && (

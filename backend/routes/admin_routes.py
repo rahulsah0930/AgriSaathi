@@ -3,6 +3,7 @@ from datetime import datetime
 from models import db
 from models.user import User
 from models.lot import CropLot
+from models.storage import Warehouse
 from models.transaction import Transaction
 from models.payment import PaymentRecord
 from models.grievance import Grievance
@@ -88,6 +89,17 @@ def update_user_status(user_id):
         user.verification_status = 'VERIFIED'
         user.verification_notes = notes or 'Verified by Maharashtra Agriculture Department Officer.'
         msg = f'User {user.name or user.phone} verified successfully.'
+
+        # Synchronize associated warehouse records if user is WAREHOUSE
+        if user.role == 'WAREHOUSE':
+            wh_prof = getattr(user, 'warehouse_profile', None)
+            wh_name = wh_prof.warehouse_name if wh_prof else user.name
+            whs = Warehouse.query.filter((Warehouse.name.ilike(f'%{wh_name}%')) | (Warehouse.name.ilike(f'%{user.name}%'))).all()
+            for w in whs:
+                w.verification_status = 'VERIFIED'
+        elif user.role in ['FARMER', 'FPO']:
+            CropLot.query.filter_by(seller_id=user.id).update({'seller_verification_status': 'VERIFIED'})
+
     elif action == 'REJECT':
         if not reason:
             return jsonify({
@@ -99,6 +111,16 @@ def update_user_status(user_id):
         user.rejection_reason = reason
         user.verification_notes = notes
         msg = f'User {user.name or user.phone} verification rejected: {reason}'
+
+        # Synchronize associated warehouse records if user is WAREHOUSE
+        if user.role == 'WAREHOUSE':
+            wh_prof = getattr(user, 'warehouse_profile', None)
+            wh_name = wh_prof.warehouse_name if wh_prof else user.name
+            whs = Warehouse.query.filter((Warehouse.name.ilike(f'%{wh_name}%')) | (Warehouse.name.ilike(f'%{user.name}%'))).all()
+            for w in whs:
+                w.verification_status = 'REJECTED'
+        elif user.role in ['FARMER', 'FPO']:
+            CropLot.query.filter_by(seller_id=user.id).update({'seller_verification_status': 'REJECTED'})
     elif action == 'SUSPEND':
         user.verification_status = 'SUSPENDED'
         user.verification_notes = notes or 'Account suspended pending administrative inquiry.'
