@@ -31,6 +31,18 @@ class CropLot(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # FPO Aggregation and Limited Collection Window Enhancements
+    target_quantity = db.Column(db.Float, nullable=True)
+    collection_start_at = db.Column(db.DateTime, nullable=True)
+    collection_deadline_at = db.Column(db.DateTime, nullable=True)
+    delivery_deadline_at = db.Column(db.DateTime, nullable=True)
+    collection_window_source = db.Column(db.String(30), default='MANUAL')  # 'MANUAL' or 'SMART_SUGGESTED'
+    aggregation_status = db.Column(db.String(30), default='OPEN')  # 'DRAFT', 'OPEN', 'CLOSING_SOON', 'FILLED', 'EXPIRED', 'CLOSED', 'CANCELLED'
+    near_capacity_notified_at = db.Column(db.DateTime, nullable=True)
+    filled_notified_at = db.Column(db.DateTime, nullable=True)
+    deadline_notified_at = db.Column(db.DateTime, nullable=True)
+    deadline_extension_count = db.Column(db.Integer, default=0)
+
     # Relationships
     members = db.relationship('FPOLotMember', backref='lot', cascade='all, delete-orphan', lazy=True)
     images = db.relationship('CropLotImage', backref='lot', cascade='all, delete-orphan', lazy=True)
@@ -56,6 +68,37 @@ class CropLot(db.Model):
         ver_status = self.quality_report.verification_status if self.quality_report else 'SELF_REPORTED'
         ver_grade = self.quality_report.verified_grade if self.quality_report else None
 
+        # Derived aggregation quantities from FPOLotMember lifecycle
+        committed_qty = 0.0
+        received_qty = 0.0
+        verified_qty = 0.0
+        if self.members:
+            for m in self.members:
+                q = m.quantity or 0.0
+                committed_qty += q
+                if m.contribution_status in ('RECEIVED', 'VERIFIED'):
+                    received_qty += q
+                if m.contribution_status == 'VERIFIED':
+                    verified_qty += q
+
+        committed_qty = round(committed_qty, 2)
+        received_qty = round(received_qty, 2)
+        verified_qty = round(verified_qty, 2)
+        target_qty = self.target_quantity if self.target_quantity is not None else self.quantity
+        target_qty = round(target_qty, 2) if target_qty else 0.0
+        available_for_sale = verified_qty
+
+        remaining_capacity = max(0.0, round(target_qty - committed_qty, 2)) if target_qty > 0 else 0.0
+        pct_filled = min(100.0, round((committed_qty / target_qty) * 100, 1)) if target_qty > 0 else 0.0
+
+        now = datetime.utcnow()
+        time_remaining_sec = None
+        is_expired = False
+        if self.collection_deadline_at:
+            diff_sec = (self.collection_deadline_at - now).total_seconds()
+            time_remaining_sec = max(0, int(diff_sec))
+            is_expired = diff_sec <= 0
+
         return {
             'id': self.id,
             'seller_id': self.seller_id,
@@ -65,6 +108,24 @@ class CropLot(db.Model):
             'crop': self.crop,
             'variety': self.variety or 'Standard',
             'quantity': self.quantity,
+            'target_quantity': target_qty,
+            'committed_quantity': committed_qty,
+            'received_quantity': received_qty,
+            'verified_quantity': verified_qty,
+            'available_for_sale': available_for_sale,
+            'remaining_capacity': remaining_capacity,
+            'percentage_filled': pct_filled,
+            'collection_start_at': self.collection_start_at.isoformat() if self.collection_start_at else None,
+            'collection_deadline_at': self.collection_deadline_at.isoformat() if self.collection_deadline_at else None,
+            'delivery_deadline_at': self.delivery_deadline_at.isoformat() if self.delivery_deadline_at else None,
+            'collection_window_source': self.collection_window_source or 'MANUAL',
+            'aggregation_status': self.aggregation_status or 'OPEN',
+            'time_remaining_seconds': time_remaining_sec,
+            'is_expired': is_expired,
+            'deadline_extension_count': self.deadline_extension_count or 0,
+            'near_capacity_notified_at': self.near_capacity_notified_at.isoformat() if self.near_capacity_notified_at else None,
+            'filled_notified_at': self.filled_notified_at.isoformat() if self.filled_notified_at else None,
+            'deadline_notified_at': self.deadline_notified_at.isoformat() if self.deadline_notified_at else None,
             'unit': self.unit,
             'quality_grade': self.quality_grade,
             'harvest_date': str(self.harvest_date),
@@ -126,6 +187,7 @@ class FPOLotMember(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     fpo_lot_id = db.Column(db.Integer, db.ForeignKey('crop_lots.id', ondelete='CASCADE'), nullable=False)
+    farmer_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
     farmer_name = db.Column(db.String(150), nullable=False)
     farmer_reference_placeholder = db.Column(db.String(50), nullable=True)
     crop = db.Column(db.String(100), nullable=False)
@@ -142,6 +204,7 @@ class FPOLotMember(db.Model):
         return {
             'id': self.id,
             'fpo_lot_id': self.fpo_lot_id,
+            'farmer_id': self.farmer_id,
             'farmer_name': self.farmer_name,
             'farmer_reference_placeholder': self.farmer_reference_placeholder,
             'crop': self.crop,

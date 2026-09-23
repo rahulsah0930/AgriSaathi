@@ -169,14 +169,32 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
 
   // Modal: Create New Aggregation Pool
   const [createPoolModalOpen, setCreatePoolModalOpen] = useState(false);
-  const [newCrop, setNewCrop] = useState('Onion');
-  const [newVariety, setNewVariety] = useState('Red Nashik');
-  const [newUnit, setNewUnit] = useState('quintal');
+  const [newCrop, setNewCrop] = useState('Tomato');
+  const [newVariety, setNewVariety] = useState('Hybrid Vaishali');
+  const [newUnit, setNewUnit] = useState('kg');
+  const [newTargetQuantity, setNewTargetQuantity] = useState('2000');
   const [newDistrict, setNewDistrict] = useState('Nashik');
-  const [newLocation, setNewLocation] = useState('Pimpalgaon Baswant APMC Packhouse');
-  const [newExpectedPrice, setNewExpectedPrice] = useState('2100');
+  const [newLocation, setNewLocation] = useState('Dindori Packhouse Aggregation Hub');
+  const [newExpectedPrice, setNewExpectedPrice] = useState('25');
   const [newQualityGrade, setNewQualityGrade] = useState('Grade A');
+  const [newStorageStatus, setNewStorageStatus] = useState('NOT_STORED');
+  const [newWindowMode, setNewWindowMode] = useState('SMART_SUGGESTED'); // 'SMART_SUGGESTED' or 'MANUAL'
+  const [newDurationHours, setNewDurationHours] = useState('10');
+  const [smartSuggestion, setSmartSuggestion] = useState(null);
+  const [isFetchingSuggestion, setIsFetchingSuggestion] = useState(false);
   const [isCreatingPool, setIsCreatingPool] = useState(false);
+
+  // Modal: Extend Aggregation Window
+  const [extendModalOpen, setExtendModalOpen] = useState(false);
+  const [lotToExtend, setLotToExtend] = useState(null);
+  const [extendHours, setExtendHours] = useState('10');
+  const [isExtending, setIsExtending] = useState(false);
+
+  // Consolidated FPO Produce Inventory & Traceability State
+  const [inventory, setInventory] = useState([]);
+  const [isInventoryLoading, setIsInventoryLoading] = useState(false);
+  const [selectedTraceabilityBatch, setSelectedTraceabilityBatch] = useState(null);
+  const [traceabilityModalOpen, setTraceabilityModalOpen] = useState(false);
 
   // Modal: Register / Create New FPO in Directory
   const [createFpoModalOpen, setCreateFpoModalOpen] = useState(false);
@@ -297,6 +315,173 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
     }
   }, [selectedLotId, fetchLotDetail]);
 
+  // Date and Time Formatting Helpers
+  const formatTimeRemaining = (seconds) => {
+    if (seconds === null || seconds === undefined) return null;
+    if (seconds <= 0) return 'Window Expired';
+    const hrs = Math.floor(seconds / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    if (hrs >= 24) {
+      const days = Math.floor(hrs / 24);
+      const remHrs = hrs % 24;
+      return `${days}d ${remHrs}h remaining`;
+    }
+    if (hrs > 0) {
+      return `${hrs}h ${mins}m remaining`;
+    }
+    return `${mins}m remaining`;
+  };
+
+  const formatDateTime = (isoString) => {
+    if (!isoString) return '—';
+    try {
+      const d = new Date(isoString);
+      return d.toLocaleString('en-IN', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      });
+    } catch (e) {
+      return isoString;
+    }
+  };
+
+  // Fetch Smart Duration Advisory
+  const fetchSmartSuggestion = useCallback(async (crop, storage) => {
+    setIsFetchingSuggestion(true);
+    try {
+      const res = await api.get(`/api/fpo/suggest-duration?crop=${encodeURIComponent(crop || 'Tomato')}&storage_status=${encodeURIComponent(storage || 'NOT_STORED')}`);
+      if (res.suggestion) {
+        setSmartSuggestion(res.suggestion);
+        if (newWindowMode === 'SMART_SUGGESTED') {
+          setNewDurationHours(String(res.suggestion.suggested_hours));
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch smart suggestion:', err);
+    } finally {
+      setIsFetchingSuggestion(false);
+    }
+  }, [newWindowMode]);
+
+  useEffect(() => {
+    if (createPoolModalOpen) {
+      fetchSmartSuggestion(newCrop, newStorageStatus);
+    }
+  }, [createPoolModalOpen, newCrop, newStorageStatus, fetchSmartSuggestion]);
+
+  // Fetch Consolidated FPO Produce Inventory
+  const fetchInventory = useCallback(async () => {
+    setIsInventoryLoading(true);
+    try {
+      const url = user?.id ? `/api/fpo/inventory?seller_id=${user.id}` : '/api/fpo/inventory';
+      const res = await api.get(url);
+      if (res.inventory) {
+        setInventory(res.inventory);
+      }
+    } catch (err) {
+      console.error('Failed to load FPO inventory:', err);
+    } finally {
+      setIsInventoryLoading(false);
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (activeTab === 'inventory') {
+      fetchInventory();
+    }
+  }, [activeTab, fetchInventory]);
+
+  // Post-deadline / Lifecycle actions
+  const handleProceedLot = async (lotId) => {
+    if (!window.confirm('Finalize this aggregation with current collected contributions? This will close the pool to new contributions and keep the marketplace listing active.')) {
+      return;
+    }
+    try {
+      const res = await api.post(`/api/fpo/lots/${lotId}/proceed`);
+      if (res.success) {
+        setFeedback({
+          type: 'success',
+          message: res.message || 'Aggregation finalized with collected volume.',
+        });
+        fetchLotDetail(lotId);
+        fetchFpoLots();
+      }
+    } catch (err) {
+      alert(`Action failed: ${err.message}`);
+    }
+  };
+
+  const handleCancelLot = async (lotId) => {
+    if (!window.confirm('Are you sure you want to cancel this aggregation? Historical data and farmer records will be preserved.')) {
+      return;
+    }
+    try {
+      const res = await api.post(`/api/fpo/lots/${lotId}/cancel`);
+      if (res.success) {
+        setFeedback({
+          type: 'info',
+          message: res.message || 'Aggregation cancelled. Preserved in historical records.',
+        });
+        fetchLotDetail(lotId);
+        fetchFpoLots();
+      }
+    } catch (err) {
+      alert(`Action failed: ${err.message}`);
+    }
+  };
+
+  const handleOpenExtendModal = (lot) => {
+    setLotToExtend(lot);
+    setExtendHours('10');
+    setExtendModalOpen(true);
+  };
+
+  const handleConfirmExtend = async (e) => {
+    e.preventDefault();
+    if (!lotToExtend || !extendHours) return;
+    setIsExtending(true);
+    try {
+      const res = await api.post(`/api/fpo/lots/${lotToExtend.id}/extend`, {
+        extension_hours: parseFloat(extendHours) || 10,
+      });
+      if (res.success) {
+        setFeedback({
+          type: 'success',
+          message: res.message || `Collection window extended by ${extendHours} hours!`,
+        });
+        setExtendModalOpen(false);
+        fetchLotDetail(lotToExtend.id);
+        fetchFpoLots();
+      }
+    } catch (err) {
+      alert(`Failed to extend window: ${err.message}`);
+    } finally {
+      setIsExtending(false);
+    }
+  };
+
+  const handleUpdateMemberStatus = async (lotId, memberId, newStatus) => {
+    try {
+      const res = await api.put(`/api/fpo/lots/${lotId}/members/${memberId}/status`, {
+        status: newStatus,
+      });
+      if (res.success) {
+        setFeedback({
+          type: 'success',
+          message: `Farmer contribution status updated to ${newStatus}.`,
+        });
+        fetchLotDetail(lotId);
+        fetchFpoLots();
+      }
+    } catch (err) {
+      alert(`Status update failed: ${err.message}`);
+    }
+  };
+
   // Handle Apply to Join FPO
   const handleApplyJoin = async (e) => {
     e.preventDefault();
@@ -305,7 +490,7 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
     try {
       const res = await api.post('/api/fpo/join-request', {
         user_id: user?.id || 1,
-        farmer_name: user?.profile?.full_name || 'Suresh Patil',
+        farmer_name: user?.profile?.full_name || user?.name || 'Suresh Patil',
         fpo_name: selectedOrgForJoin.name,
         phone: joinPhone,
         crop: joinCrop,
@@ -332,15 +517,22 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
     e.preventDefault();
     if (!selectedLotId || !memberFarmerName || !memberQuantity) return;
 
+    const enteredQty = parseFloat(memberQuantity);
+    if (selectedLot?.remaining_capacity !== undefined && enteredQty > selectedLot.remaining_capacity) {
+      alert(`Only ${selectedLot.remaining_capacity} ${selectedLot.unit} capacity remains in this aggregation.`);
+      return;
+    }
+
     setIsAddingMember(true);
     try {
       const payload = {
         farmer_name: memberFarmerName,
         farmer_reference_placeholder: memberPhone ? `TEL-${memberPhone.slice(-4)}` : undefined,
-        quantity: parseFloat(memberQuantity),
-        unit: selectedLot?.unit || 'quintal',
+        quantity: enteredQty,
+        unit: selectedLot?.unit || 'kg',
         quality_grade: memberGrade,
         contribution_status: memberStatus,
+        user_id: user?.id,
       };
 
       const res = await api.post(`/api/fpo/lots/${selectedLotId}/members`, payload);
@@ -350,7 +542,7 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
           message: `Added member contribution of ${memberQuantity} ${selectedLot?.unit} from ${memberFarmerName}!`,
         });
         setAddMemberModalOpen(false);
-        setMemberFarmerName('');
+        setMemberFarmerName(isFarmer ? (user?.profile?.full_name || user?.name || '') : '');
         setMemberPhone('');
         setMemberQuantity('');
         // Refresh detail and lots
@@ -422,15 +614,19 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
         unit: newUnit,
         district: newDistrict,
         location: newLocation,
-        expected_price: parseFloat(newExpectedPrice) || 2000,
+        target_quantity: parseFloat(newTargetQuantity) || 2000,
+        expected_price: parseFloat(newExpectedPrice) || 25,
         quality_grade: newQualityGrade,
+        duration_hours: parseFloat(newDurationHours) || 10,
+        collection_window_source: newWindowMode,
+        storage_status: newStorageStatus,
       };
 
       const res = await api.post('/api/fpo/lots', payload);
       if (res.success) {
         setFeedback({
           type: 'success',
-          message: `New aggregation pool for ${newCrop} initiated in DRAFT state! Add your member contributions now.`,
+          message: res.message || `New aggregation requirement for ${newCrop} initiated! Collection window is now open.`,
         });
         setCreatePoolModalOpen(false);
         fetchFpoLots();
@@ -655,6 +851,30 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
             >
               <BarChart2 size={18} color={activeTab === 'benchmarks' ? 'var(--primary-700)' : 'currentColor'} />
               <span>Compare with Other FPOs (Market Benchmarks)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('inventory');
+                fetchInventory();
+              }}
+              style={{
+                padding: '10px 18px',
+                border: 'none',
+                background: 'none',
+                borderBottom: activeTab === 'inventory' ? '3px solid var(--primary-700)' : '3px solid transparent',
+                color: activeTab === 'inventory' ? 'var(--primary-800)' : 'var(--slate-600)',
+                fontWeight: activeTab === 'inventory' ? 700 : 500,
+                cursor: 'pointer',
+                fontSize: '0.95rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+              }}
+            >
+              <Package size={18} color={activeTab === 'inventory' ? 'var(--primary-700)' : 'currentColor'} />
+              <span>Consolidated Produce Inventory & Traceability</span>
             </button>
           </>
         ) : (
@@ -1341,6 +1561,7 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
 
             {fpoLots.map((lot) => {
               const isSelected = selectedLotId === lot.id;
+              const isLotExpired = lot.aggregation_status === 'EXPIRED' || lot.is_expired;
               return (
                 <div
                   key={lot.id}
@@ -1364,23 +1585,51 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
                         Lot #{lot.id} • {lot.location || lot.district}
                       </span>
                     </div>
-                    <Badge variant={lot.status === 'ACTIVE' ? 'success' : lot.status === 'DRAFT' ? 'warning' : 'info'}>
-                      {lot.status}
-                    </Badge>
+                    <div>
+                      {isLotExpired ? (
+                        <Badge variant="danger">EXPIRED</Badge>
+                      ) : lot.aggregation_status === 'FILLED' ? (
+                        <Badge variant="success">FILLED</Badge>
+                      ) : lot.aggregation_status === 'CLOSING_SOON' ? (
+                        <Badge variant="warning">CLOSING SOON</Badge>
+                      ) : (
+                        <Badge variant="info">OPEN</Badge>
+                      )}
+                    </div>
                   </div>
 
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem' }}>
-                    <span style={{ fontWeight: 600, color: 'var(--slate-700)' }}>
-                      {lot.quantity} {lot.unit}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.85rem', marginBottom: '6px' }}>
+                    <span style={{ fontWeight: 700, color: 'var(--slate-800)' }}>
+                      {lot.committed_quantity || 0} / {lot.target_quantity || lot.quantity} {lot.unit}
                     </span>
                     <span style={{ color: 'var(--primary-800)', fontWeight: 700 }}>
                       ₹{lot.expected_price}/{lot.unit}
                     </span>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '8px', fontSize: '0.75rem', color: 'var(--slate-500)' }}>
-                    <Users size={13} />
-                    <span>{lot.members_count || 0} contributing farmers</span>
+                  {/* Visual Progress Bar */}
+                  <div style={{ width: '100%', height: '6px', backgroundColor: 'var(--slate-200)', borderRadius: '3px', overflow: 'hidden', marginBottom: '8px' }}>
+                    <div
+                      style={{
+                        width: `${Math.min(100, lot.percentage_filled || 0)}%`,
+                        height: '100%',
+                        backgroundColor: isLotExpired ? '#ef4444' : lot.aggregation_status === 'FILLED' ? '#10b981' : lot.aggregation_status === 'CLOSING_SOON' ? '#f59e0b' : 'var(--primary-600)',
+                        transition: 'width 0.3s ease',
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.75rem', color: 'var(--slate-500)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <Clock size={12} />
+                      <span style={{ fontWeight: 600, color: isLotExpired ? '#dc2626' : 'inherit' }}>
+                        {formatTimeRemaining(lot.time_remaining_seconds) || 'Open Window'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <Users size={12} />
+                      <span>{lot.members_count || 0} farmers</span>
+                    </div>
                   </div>
                 </div>
               );
@@ -1397,74 +1646,280 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
                 <Card>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '16px' }}>
                     <div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '6px', flexWrap: 'wrap' }}>
                         <h2 style={{ fontSize: '1.3rem', fontWeight: 800, color: 'var(--slate-900)', margin: 0 }}>
-                          {selectedLot.crop} Bulk Pool — {selectedLot.variety}
+                          {selectedLot.crop} Aggregation — {selectedLot.variety}
                         </h2>
-                        <Badge variant={selectedLot.status === 'ACTIVE' ? 'success' : 'warning'}>
-                          {selectedLot.status}
-                        </Badge>
-                        <Badge variant="info">{selectedLot.quality_grade}</Badge>
+                        {selectedLot.aggregation_status === 'EXPIRED' || selectedLot.is_expired ? (
+                          <Badge variant="danger">EXPIRED</Badge>
+                        ) : selectedLot.aggregation_status === 'FILLED' ? (
+                          <Badge variant="success">FILLED (100%)</Badge>
+                        ) : selectedLot.aggregation_status === 'CLOSING_SOON' ? (
+                          <Badge variant="warning">CLOSING SOON (90%)</Badge>
+                        ) : (
+                          <Badge variant="info">OPEN FOR CONTRIBUTIONS</Badge>
+                        )}
+                        <Badge variant="default">{selectedLot.quality_grade}</Badge>
+                        <span style={{ fontSize: '0.75rem', backgroundColor: '#f1f5f9', color: '#475569', padding: '3px 8px', borderRadius: '12px', fontWeight: 600 }}>
+                          {selectedLot.collection_window_source === 'SMART_SUGGESTED' ? 'Smart Advisory Window' : 'Manual Window'}
+                        </span>
                       </div>
                       <p style={{ color: 'var(--slate-600)', fontSize: '0.875rem', margin: 0 }}>
-                        FPO Hub: <strong>{selectedLot.seller_name}</strong> • Location: <strong>{selectedLot.location}</strong> ({selectedLot.district})
+                        FPO Hub: <strong>{selectedLot.seller_name}</strong> • Collection Hub: <strong>{selectedLot.location}</strong> ({selectedLot.district})
                       </p>
                     </div>
 
-                    <div style={{ display: 'flex', gap: '10px' }}>
-                      {selectedLot.status === 'DRAFT' && (
-                        <Button
-                          variant="primary"
-                          icon={FileCheck}
-                          onClick={handlePublishLot}
-                        >
-                          Publish to Marketplace
-                        </Button>
+                    <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                      {/* Post-deadline FPO Action Decisions */}
+                      {!isFarmer && (selectedLot.aggregation_status === 'EXPIRED' || selectedLot.is_expired) ? (
+                        <>
+                          <Button
+                            variant="primary"
+                            icon={CheckCircle2}
+                            onClick={() => handleProceedLot(selectedLot.id)}
+                            style={{ backgroundColor: '#15803d', borderColor: '#15803d' }}
+                          >
+                            Proceed with Collected ({selectedLot.committed_quantity} {selectedLot.unit})
+                          </Button>
+                          <Button
+                            variant="outline-primary"
+                            icon={Clock}
+                            onClick={() => handleOpenExtendModal(selectedLot)}
+                          >
+                            Extend Window
+                          </Button>
+                          <Button
+                            variant="outline-primary"
+                            icon={Trash2}
+                            onClick={() => handleCancelLot(selectedLot.id)}
+                            style={{ color: '#dc2626', borderColor: '#fca5a5' }}
+                          >
+                            Cancel Aggregation
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          {selectedLot.status === 'DRAFT' && !isFarmer && (
+                            <Button
+                              variant="primary"
+                              icon={FileCheck}
+                              onClick={handlePublishLot}
+                            >
+                              Publish to Marketplace
+                            </Button>
+                          )}
+                          {selectedLot.aggregation_status !== 'FILLED' && selectedLot.aggregation_status !== 'CLOSED' && selectedLot.aggregation_status !== 'CANCELLED' && (
+                            <Button
+                              variant="primary"
+                              icon={PlusCircle}
+                              onClick={() => {
+                                if (isFarmer) {
+                                  setMemberFarmerName(user?.profile?.full_name || user?.name || 'Suresh Patil');
+                                  setMemberPhone(user?.phone || '');
+                                }
+                                setAddMemberModalOpen(true);
+                              }}
+                            >
+                              {isFarmer ? 'Pledge Crop Contribution' : 'Add Member Contribution'}
+                            </Button>
+                          )}
+                        </>
                       )}
-                      <Button
-                        variant={selectedLot.status === 'DRAFT' ? 'outline-primary' : 'primary'}
-                        icon={PlusCircle}
-                        onClick={() => setAddMemberModalOpen(true)}
-                      >
-                        Add Member Contribution
-                      </Button>
                     </div>
                   </div>
 
+                  {/* Deadline / Closure Informational Banner */}
+                  {(selectedLot.aggregation_status === 'EXPIRED' || selectedLot.is_expired) && (
+                    <div
+                      style={{
+                        marginTop: '16px',
+                        backgroundColor: '#fef2f2',
+                        border: '1px solid #fecaca',
+                        borderRadius: '8px',
+                        padding: '12px 16px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        color: '#991b1b',
+                        fontSize: '0.88rem',
+                      }}
+                    >
+                      <AlertCircle size={20} color="#dc2626" style={{ flexShrink: 0 }} />
+                      <div>
+                        <strong>Collection window has ended:</strong> This pool aggregated {selectedLot.committed_quantity} {selectedLot.unit} out of the {selectedLot.target_quantity} {selectedLot.unit} target. As FPO administrator, you can finalize with existing volume, extend the window, or cancel.
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedLot.aggregation_status === 'FILLED' && (
+                    <div
+                      style={{
+                        marginTop: '16px',
+                        backgroundColor: '#f0fdf4',
+                        border: '1px solid #bbf7d0',
+                        borderRadius: '8px',
+                        padding: '12px 16px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        color: '#166534',
+                        fontSize: '0.88rem',
+                      }}
+                    >
+                      <CheckCircle2 size={20} color="#16a34a" style={{ flexShrink: 0 }} />
+                      <div>
+                        <strong>Target capacity reached (100%):</strong> Total target of {selectedLot.target_quantity} {selectedLot.unit} has been fully pledged. New contributions are automatically closed.
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 5 Distinct Tracked Quantity Metrics */}
                   <div
                     style={{
                       display: 'grid',
-                      gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-                      gap: '16px',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                      gap: '14px',
                       marginTop: '20px',
                       paddingTop: '16px',
                       borderTop: '1px solid var(--border-color)',
                     }}
                   >
-                    <div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--slate-500)', marginBottom: '2px' }}>Total Aggregated Volume</div>
-                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--slate-900)' }}>
-                        {selectedLot.quantity} {selectedLot.unit}
+                    <div style={{ backgroundColor: '#f8fafc', padding: '12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                      <div style={{ fontSize: '0.73rem', color: 'var(--slate-500)', fontWeight: 700, textTransform: 'uppercase' }}>1. Target Volume</div>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--slate-900)', marginTop: '2px' }}>
+                        {selectedLot.target_quantity || selectedLot.quantity} {selectedLot.unit}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--slate-500)', marginTop: '2px' }}>FPO Target Quota</div>
+                    </div>
+
+                    <div style={{ backgroundColor: '#eff6ff', padding: '12px', borderRadius: '8px', border: '1px solid #bfdbfe' }}>
+                      <div style={{ fontSize: '0.73rem', color: '#1e40af', fontWeight: 700, textTransform: 'uppercase' }}>2. Committed (Pledged)</div>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#1d4ed8', marginTop: '2px' }}>
+                        {selectedLot.committed_quantity || 0} {selectedLot.unit}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: '#2563eb', marginTop: '2px' }}>{selectedLot.percentage_filled || 0}% of target</div>
+                    </div>
+
+                    <div style={{ backgroundColor: '#fefce8', padding: '12px', borderRadius: '8px', border: '1px solid #fef08a' }}>
+                      <div style={{ fontSize: '0.73rem', color: '#854d0e', fontWeight: 700, textTransform: 'uppercase' }}>3. Physically Received</div>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#a16207', marginTop: '2px' }}>
+                        {selectedLot.received_quantity || 0} {selectedLot.unit}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: '#a16207', marginTop: '2px' }}>Arrived at packhouse</div>
+                    </div>
+
+                    <div style={{ backgroundColor: '#f0fdf4', padding: '12px', borderRadius: '8px', border: '1px solid #bbf7d0' }}>
+                      <div style={{ fontSize: '0.73rem', color: '#166534', fontWeight: 700, textTransform: 'uppercase' }}>4. Quality Verified</div>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#15803d', marginTop: '2px' }}>
+                        {selectedLot.verified_quantity || 0} {selectedLot.unit}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: '#166534', marginTop: '2px' }}>Weight & grade checked</div>
+                    </div>
+
+                    <div style={{ backgroundColor: '#ecfdf5', padding: '12px', borderRadius: '8px', border: '1.5px solid #86efac' }}>
+                      <div style={{ fontSize: '0.73rem', color: '#065f46', fontWeight: 700, textTransform: 'uppercase' }}>5. Available for Sale</div>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#047857', marginTop: '2px' }}>
+                        {selectedLot.available_for_sale || 0} {selectedLot.unit}
+                      </div>
+                      <div style={{ fontSize: '0.75rem', color: '#059669', marginTop: '2px' }}>Ready for buyer contracts</div>
+                    </div>
+                  </div>
+
+                  {/* Window Timeline & Progress Bar */}
+                  <div style={{ marginTop: '16px', padding: '14px 16px', backgroundColor: 'var(--slate-50)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.85rem' }}>
+                        <Clock size={16} color="var(--primary-700)" />
+                        <span style={{ fontWeight: 700, color: 'var(--slate-800)' }}>
+                          Collection Window: {formatTimeRemaining(selectedLot.time_remaining_seconds) || 'Active'}
+                        </span>
+                        {selectedLot.deadline_extension_count > 0 && (
+                          <span style={{ fontSize: '0.75rem', backgroundColor: '#e0e7ff', color: '#3730a3', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>
+                            Extended {selectedLot.deadline_extension_count}x
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '0.82rem', color: 'var(--slate-600)' }}>
+                        <strong>Starts:</strong> {formatDateTime(selectedLot.collection_start_at)} • <strong>Deadline:</strong> {formatDateTime(selectedLot.collection_deadline_at)}
                       </div>
                     </div>
-                    <div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--slate-500)', marginBottom: '2px' }}>Expected Benchmark Rate</div>
-                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--primary-700)' }}>
-                        ₹{selectedLot.expected_price}/{selectedLot.unit}
-                      </div>
+
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', color: 'var(--slate-600)', marginBottom: '4px' }}>
+                      <span>Progress: <strong>{selectedLot.percentage_filled || 0}% filled</strong></span>
+                      <span>Remaining Capacity: <strong>{selectedLot.remaining_capacity || 0} {selectedLot.unit}</strong></span>
                     </div>
-                    <div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--slate-500)', marginBottom: '2px' }}>Total Pool Valuation</div>
-                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--slate-900)' }}>
-                        ₹{selectedLot.total_valuation?.toLocaleString('en-IN')}
-                      </div>
+
+                    <div style={{ width: '100%', height: '10px', backgroundColor: 'var(--slate-200)', borderRadius: '5px', overflow: 'hidden' }}>
+                      <div
+                        style={{
+                          width: `${Math.min(100, selectedLot.percentage_filled || 0)}%`,
+                          height: '100%',
+                          backgroundColor: selectedLot.aggregation_status === 'FILLED' ? '#10b981' : selectedLot.aggregation_status === 'CLOSING_SOON' ? '#f59e0b' : 'var(--primary-600)',
+                          transition: 'width 0.3s ease',
+                        }}
+                      />
                     </div>
-                    <div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--slate-500)', marginBottom: '2px' }}>Contributing Members</div>
-                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--slate-900)' }}>
-                        {selectedLot.members?.length || 0} Farmers
+
+                    {/* FPO Post-Deadline / Pool Lifecycle Action Controls */}
+                    {!isFarmer && selectedLot.aggregation_status !== 'CANCELLED' && (
+                      <div
+                        style={{
+                          marginTop: '16px',
+                          paddingTop: '14px',
+                          borderTop: '1px solid var(--border-color)',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
+                          gap: '12px',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--slate-700)' }}>
+                            FPO Pool Decisions:
+                          </span>
+                          {selectedLot.is_expired && selectedLot.aggregation_status !== 'PROCEEDED' && (
+                            <span style={{ fontSize: '0.78rem', color: '#b45309', backgroundColor: '#fef3c7', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>
+                              ⚠️ Deadline reached. Choose next step:
+                            </span>
+                          )}
+                          {selectedLot.aggregation_status === 'PROCEEDED' && (
+                            <span style={{ fontSize: '0.78rem', color: '#15803d', backgroundColor: '#dcfce7', padding: '3px 8px', borderRadius: '4px', fontWeight: 600 }}>
+                              ✓ Finalized with collected volume
+                            </span>
+                          )}
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                          {selectedLot.aggregation_status !== 'PROCEEDED' && (
+                            <Button
+                              variant="outline-primary"
+                              size="sm"
+                              icon={CheckCircle2}
+                              onClick={() => handleProceedLot(selectedLot.id)}
+                            >
+                              Proceed with Collected Quantity
+                            </Button>
+                          )}
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            icon={Clock}
+                            onClick={() => handleOpenExtendModal(selectedLot)}
+                          >
+                            Extend Collection Window
+                          </Button>
+                          <Button
+                            variant="danger"
+                            size="sm"
+                            icon={Trash2}
+                            onClick={() => handleCancelLot(selectedLot.id)}
+                          >
+                            Cancel Aggregation
+                          </Button>
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 </Card>
 
@@ -1611,17 +2066,65 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
                                 ₹{(m.estimated_payout || 0).toLocaleString('en-IN')}
                               </td>
                               <td style={{ padding: '12px 14px' }}>
-                                <Badge
-                                  variant={
-                                    m.contribution_status === 'VERIFIED'
-                                      ? 'success'
-                                      : m.contribution_status === 'RECEIVED'
-                                      ? 'info'
-                                      : 'warning'
-                                  }
-                                >
-                                  {m.contribution_status}
-                                </Badge>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                  <Badge
+                                    variant={
+                                      m.contribution_status === 'VERIFIED'
+                                        ? 'success'
+                                        : m.contribution_status === 'RECEIVED'
+                                        ? 'info'
+                                        : 'warning'
+                                    }
+                                  >
+                                    {m.contribution_status}
+                                  </Badge>
+
+                                  {!isFarmer && m.contribution_status === 'PLEDGED' && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUpdateMemberStatus(selectedLot.id, m.id, 'RECEIVED')}
+                                      style={{
+                                        padding: '3px 8px',
+                                        fontSize: '0.74rem',
+                                        borderRadius: '4px',
+                                        border: '1px solid #bfdbfe',
+                                        backgroundColor: '#eff6ff',
+                                        color: '#1d4ed8',
+                                        cursor: 'pointer',
+                                        fontWeight: 600,
+                                      }}
+                                      title="Confirm harvest has arrived at packhouse"
+                                    >
+                                      Mark Received
+                                    </button>
+                                  )}
+
+                                  {!isFarmer && m.contribution_status === 'RECEIVED' && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUpdateMemberStatus(selectedLot.id, m.id, 'VERIFIED')}
+                                      style={{
+                                        padding: '3px 8px',
+                                        fontSize: '0.74rem',
+                                        borderRadius: '4px',
+                                        border: '1px solid #bbf7d0',
+                                        backgroundColor: '#f0fdf4',
+                                        color: '#15803d',
+                                        cursor: 'pointer',
+                                        fontWeight: 600,
+                                      }}
+                                      title="Confirm quality grade and weight check"
+                                    >
+                                      Verify & Accept
+                                    </button>
+                                  )}
+
+                                  {!isFarmer && m.contribution_status === 'VERIFIED' && (
+                                    <span style={{ fontSize: '0.74rem', color: '#16a34a', fontWeight: 600 }}>
+                                      ✓ Ready for Sale
+                                    </span>
+                                  )}
+                                </div>
                               </td>
                               {selectedLot.status === 'DRAFT' && (
                                 <td style={{ padding: '12px 14px', textAlign: 'right' }}>
@@ -2321,6 +2824,256 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
         </div>
       )}
 
+      {/* TAB: CONSOLIDATED FPO PRODUCE INVENTORY & TRACEABILITY */}
+      {!isFarmer && activeTab === 'inventory' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+          {/* Header Banner */}
+          <div
+            style={{
+              background: 'linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 60%, #eff6ff 100%)',
+              border: '1.5px solid #86efac',
+              borderRadius: '12px',
+              padding: '22px 24px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '16px',
+            }}
+          >
+            <div>
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  backgroundColor: '#dcfce7',
+                  color: '#15803d',
+                  padding: '3px 10px',
+                  borderRadius: '16px',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  marginBottom: '6px',
+                }}
+              >
+                <Package size={14} /> FPO CONSOLIDATED PRODUCE INVENTORY & TRACEABILITY
+              </div>
+              <h3 style={{ fontSize: '1.3rem', fontWeight: 800, color: '#14532d', margin: '0 0 6px' }}>
+                Produce Aggregation Inventory & Farm Gate Traceability
+              </h3>
+              <p style={{ color: '#334155', fontSize: '0.88rem', margin: 0, maxWidth: '780px', lineHeight: 1.5 }}>
+                Track committed, received, verified, and sale-ready volumes across all your aggregation pools. View agronomic sell urgency ratings to prioritize buyer negotiations and trace every kilogram back to individual smallholder farmers.
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: '10px' }}>
+              <Button
+                variant="outline-primary"
+                icon={RefreshCw}
+                onClick={fetchInventory}
+                disabled={isInventoryLoading}
+              >
+                {isInventoryLoading ? 'Refreshing...' : 'Refresh Inventory'}
+              </Button>
+            </div>
+          </div>
+
+          {/* Consolidated KPI Summary */}
+          {(() => {
+            const totalTarget = inventory.reduce((acc, item) => acc + (item.target_quantity || 0), 0);
+            const totalCommitted = inventory.reduce((acc, item) => acc + (item.committed_quantity || 0), 0);
+            const totalReceived = inventory.reduce((acc, item) => acc + (item.received_quantity || 0), 0);
+            const totalVerified = inventory.reduce((acc, item) => acc + (item.verified_quantity || 0), 0);
+            const totalAvailable = inventory.reduce((acc, item) => acc + (item.available_for_sale || 0), 0);
+
+            return (
+              <div className="four-col-grid">
+                <StatCard
+                  label="Target Aggregation Quota"
+                  value={`${totalTarget.toLocaleString('en-IN')} kg`}
+                  helper="Across all crop requirements"
+                  icon={Package}
+                  iconColor="var(--slate-700)"
+                  iconBg="var(--slate-100)"
+                />
+                <StatCard
+                  label="Pledged by Members"
+                  value={`${totalCommitted.toLocaleString('en-IN')} kg`}
+                  helper="Farmer harvest commitments"
+                  icon={Users}
+                  iconColor="var(--accent-blue)"
+                  iconBg="var(--accent-blue-light)"
+                />
+                <StatCard
+                  label="Physically Received"
+                  value={`${totalReceived.toLocaleString('en-IN')} kg`}
+                  helper="Arrived at packhouse"
+                  icon={Truck}
+                  iconColor="#d97706"
+                  iconBg="#fef3c7"
+                />
+                <StatCard
+                  label="Available for Sale"
+                  value={`${totalAvailable.toLocaleString('en-IN')} kg`}
+                  helper="Quality checked & contract ready"
+                  icon={CheckCircle2}
+                  iconColor="#15803d"
+                  iconBg="#dcfce7"
+                />
+              </div>
+            );
+          })()}
+
+          {/* Inventory Table Card */}
+          <Card
+            title="Consolidated Produce Inventory by Crop"
+            subtitle="Authoritative breakdown across all active aggregation requirements and underlying farmer batches"
+          >
+            {isInventoryLoading ? (
+              <LoadingState text="Loading consolidated inventory..." />
+            ) : inventory.length === 0 ? (
+              <EmptyState
+                icon={Package}
+                title="No Aggregated Produce Inventory"
+                message="Create an aggregation pool and record member contributions to populate your inventory."
+                action={
+                  <Button variant="primary" icon={PlusCircle} onClick={() => setCreatePoolModalOpen(true)}>
+                    Create First Aggregation Group
+                  </Button>
+                }
+              />
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.88rem' }}>
+                  <thead>
+                    <tr style={{ backgroundColor: 'var(--slate-50)', borderBottom: '1px solid var(--border-color)' }}>
+                      <th style={{ padding: '12px 16px', fontWeight: 700, color: 'var(--slate-700)' }}>Crop & Batches</th>
+                      <th style={{ padding: '12px 16px', fontWeight: 700, color: 'var(--slate-700)' }}>Target Quota</th>
+                      <th style={{ padding: '12px 16px', fontWeight: 700, color: 'var(--slate-700)' }}>Committed (Pledged)</th>
+                      <th style={{ padding: '12px 16px', fontWeight: 700, color: 'var(--slate-700)' }}>Physically Received</th>
+                      <th style={{ padding: '12px 16px', fontWeight: 700, color: 'var(--slate-700)' }}>Quality Verified</th>
+                      <th style={{ padding: '12px 16px', fontWeight: 700, color: 'var(--slate-700)' }}>Available for Sale</th>
+                      <th style={{ padding: '12px 16px', fontWeight: 700, color: 'var(--slate-700)' }}>Agronomic Sell Urgency</th>
+                      <th style={{ padding: '12px 16px', fontWeight: 700, color: 'var(--slate-700)', textAlign: 'right' }}>Farm Traceability</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {inventory.map((item) => (
+                      <tr key={item.crop} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                        <td style={{ padding: '14px 16px' }}>
+                          <div style={{ fontWeight: 800, color: 'var(--slate-900)', fontSize: '0.96rem' }}>
+                            {item.crop}
+                          </div>
+                          <span style={{ fontSize: '0.78rem', color: 'var(--slate-500)' }}>
+                            {item.lots_count} aggregation {item.lots_count === 1 ? 'pool' : 'pools'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '14px 16px', fontWeight: 600, color: 'var(--slate-700)' }}>
+                          {item.target_quantity.toLocaleString('en-IN')} {item.unit}
+                        </td>
+                        <td style={{ padding: '14px 16px', fontWeight: 700, color: '#1d4ed8' }}>
+                          {item.committed_quantity.toLocaleString('en-IN')} {item.unit}
+                        </td>
+                        <td style={{ padding: '14px 16px', fontWeight: 600, color: '#a16207' }}>
+                          {item.received_quantity.toLocaleString('en-IN')} {item.unit}
+                        </td>
+                        <td style={{ padding: '14px 16px', fontWeight: 700, color: '#15803d' }}>
+                          {item.verified_quantity.toLocaleString('en-IN')} {item.unit}
+                        </td>
+                        <td style={{ padding: '14px 16px', fontWeight: 800, color: '#047857', fontSize: '1rem' }}>
+                          {item.available_for_sale.toLocaleString('en-IN')} {item.unit}
+                        </td>
+                        <td style={{ padding: '14px 16px' }}>
+                          {item.sell_urgency?.level === 'SELL URGENTLY' ? (
+                            <div>
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  backgroundColor: '#fee2e2',
+                                  color: '#b91c1c',
+                                  border: '1px solid #fca5a5',
+                                  padding: '3px 8px',
+                                  borderRadius: '4px',
+                                  fontSize: '0.75rem',
+                                  fontWeight: 700,
+                                }}
+                              >
+                                <AlertTriangle size={12} /> SELL URGENTLY
+                              </span>
+                              <div style={{ fontSize: '0.72rem', color: '#991b1b', marginTop: '3px', maxWidth: '200px', lineHeight: 1.3 }}>
+                                {item.sell_urgency.reason}
+                              </div>
+                            </div>
+                          ) : item.sell_urgency?.level === 'SELL SOON' ? (
+                            <div>
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  backgroundColor: '#fef3c7',
+                                  color: '#b45309',
+                                  border: '1px solid #fde68a',
+                                  padding: '3px 8px',
+                                  borderRadius: '4px',
+                                  fontSize: '0.75rem',
+                                  fontWeight: 700,
+                                }}
+                              >
+                                <Clock size={12} /> SELL SOON
+                              </span>
+                              <div style={{ fontSize: '0.72rem', color: '#92400e', marginTop: '3px', maxWidth: '200px', lineHeight: 1.3 }}>
+                                {item.sell_urgency.reason}
+                              </div>
+                            </div>
+                          ) : (
+                            <div>
+                              <span
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  backgroundColor: '#dcfce7',
+                                  color: '#15803d',
+                                  border: '1px solid #86efac',
+                                  padding: '3px 8px',
+                                  borderRadius: '4px',
+                                  fontSize: '0.75rem',
+                                  fontWeight: 700,
+                                }}
+                              >
+                                <ShieldCheck size={12} /> STABLE
+                              </span>
+                              <div style={{ fontSize: '0.72rem', color: '#166534', marginTop: '3px', maxWidth: '200px', lineHeight: 1.3 }}>
+                                {item.sell_urgency?.reason || 'Adequate shelf life.'}
+                              </div>
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ padding: '14px 16px', textAlign: 'right' }}>
+                          <Button
+                            variant="outline-primary"
+                            size="sm"
+                            icon={FileCheck}
+                            onClick={() => {
+                              setSelectedTraceabilityBatch(item);
+                              setTraceabilityModalOpen(true);
+                            }}
+                          >
+                            Trace Batches ({item.batches?.length || 0})
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
       {/* 4. Modal: Add Member Contribution */}
       <Modal
         isOpen={addMemberModalOpen}
@@ -2432,11 +3185,11 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
         </form>
       </Modal>
 
-      {/* 5. Modal: Create New Aggregation Group (For Online Farmers to Join) */}
+      {/* 5. Modal: Create New Aggregation Group (With Target Quota & Collection Window) */}
       <Modal
         isOpen={createPoolModalOpen}
         onClose={() => setCreatePoolModalOpen(false)}
-        title="Create Aggregation Group (For Online Farmers to Join)"
+        title="Create Crop Aggregation Group (Target Quota & Collection Window)"
         footer={
           <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
             <Button variant="outline-primary" onClick={() => setCreatePoolModalOpen(false)}>
@@ -2445,7 +3198,7 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
             <Button
               variant="primary"
               onClick={handleCreatePool}
-              disabled={isCreatingPool || !newLocation}
+              disabled={isCreatingPool || !newLocation || !newTargetQuantity}
             >
               {isCreatingPool ? 'Initializing Group...' : 'Create Aggregation Group'}
             </Button>
@@ -2463,8 +3216,10 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
               color: '#166534',
             }}
           >
-            👥 <strong>Online Farmer Collective Pooling:</strong> Creating this group allows registered online farmers in Maharashtra to discover your FPO, view your minimum guaranteed rate, and pledge their crop harvest online to fill your truckload quota.
+            👥 <strong>Online Farmer Collective Pooling:</strong> Define your target volume quota and collection window. Smallholder farmers can view this requirement and pledge their harvest before the window expires or fills.
           </div>
+
+          {/* Crop & Variety */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             <div>
               <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-700)', marginBottom: '6px' }}>
@@ -2473,7 +3228,10 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
               <Select
                 options={CROP_OPTIONS}
                 value={newCrop}
-                onChange={(e) => setNewCrop(e.target.value)}
+                onChange={(e) => {
+                  setNewCrop(e.target.value);
+                  fetchSmartSuggestion(e.target.value, newStorageStatus);
+                }}
               />
             </div>
 
@@ -2482,7 +3240,7 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
                 Variety *
               </label>
               <Input
-                placeholder="e.g. Red Garwa, Bhagwa"
+                placeholder="e.g. Hybrid Vaishali, Red Garwa"
                 value={newVariety}
                 onChange={(e) => setNewVariety(e.target.value)}
                 required
@@ -2490,7 +3248,23 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
             </div>
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          {/* Target Quantity & Unit */}
+          <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '12px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-700)', marginBottom: '6px' }}>
+                Target Aggregation Quota (Volume) *
+              </label>
+              <Input
+                type="number"
+                step="any"
+                placeholder="e.g. 2000"
+                value={newTargetQuantity}
+                onChange={(e) => setNewTargetQuantity(e.target.value)}
+                required
+                helperText="Total volume required to fill commercial truckload/contract"
+              />
+            </div>
+
             <div>
               <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-700)', marginBottom: '6px' }}>
                 Quantity Unit *
@@ -2501,19 +3275,206 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
                 onChange={(e) => setNewUnit(e.target.value)}
               />
             </div>
+          </div>
 
-            <div>
-              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-700)', marginBottom: '6px' }}>
-                Target Quality Grade
+          {/* Storage & Packhouse Facility */}
+          <div>
+            <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-700)', marginBottom: '6px' }}>
+              Packhouse Facility & Storage Condition
+            </label>
+            <div style={{ display: 'flex', gap: '12px' }}>
+              <label
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '10px 14px',
+                  borderRadius: '6px',
+                  border: newStorageStatus === 'NOT_STORED' ? '2px solid var(--primary-600)' : '1px solid var(--border-color)',
+                  backgroundColor: newStorageStatus === 'NOT_STORED' ? '#ecfdf5' : '#ffffff',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                }}
+              >
+                <input
+                  type="radio"
+                  name="storageStatus"
+                  checked={newStorageStatus === 'NOT_STORED'}
+                  onChange={() => {
+                    setNewStorageStatus('NOT_STORED');
+                    fetchSmartSuggestion(newCrop, 'NOT_STORED');
+                  }}
+                />
+                <div>
+                  <strong>Ambient Storage</strong>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--slate-500)' }}>Local ambient packhouse shed</div>
+                </div>
               </label>
-              <Select
-                options={QUALITY_OPTIONS}
-                value={newQualityGrade}
-                onChange={(e) => setNewQualityGrade(e.target.value)}
-              />
+
+              <label
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '8px',
+                  padding: '10px 14px',
+                  borderRadius: '6px',
+                  border: newStorageStatus === 'STORED' ? '2px solid var(--primary-600)' : '1px solid var(--border-color)',
+                  backgroundColor: newStorageStatus === 'STORED' ? '#ecfdf5' : '#ffffff',
+                  cursor: 'pointer',
+                  fontSize: '0.85rem',
+                }}
+              >
+                <input
+                  type="radio"
+                  name="storageStatus"
+                  checked={newStorageStatus === 'STORED'}
+                  onChange={() => {
+                    setNewStorageStatus('STORED');
+                    fetchSmartSuggestion(newCrop, 'STORED');
+                  }}
+                />
+                <div>
+                  <strong>Cold Chain Hub</strong>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--slate-500)' }}>Pre-cooled / refrigerated warehouse</div>
+                </div>
+              </label>
             </div>
           </div>
 
+          {/* Collection Window Duration Selector */}
+          <div style={{ border: '1px solid var(--border-color)', borderRadius: '8px', padding: '16px', backgroundColor: 'var(--slate-50)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+              <label style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--slate-800)', margin: 0 }}>
+                Collection Window Duration
+              </label>
+              <div style={{ display: 'flex', gap: '4px', backgroundColor: 'var(--slate-200)', padding: '2px', borderRadius: '6px' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNewWindowMode('SMART_SUGGESTED');
+                    if (smartSuggestion) {
+                      setNewDurationHours(String(smartSuggestion.suggested_hours));
+                    }
+                  }}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    borderRadius: '4px',
+                    border: 'none',
+                    backgroundColor: newWindowMode === 'SMART_SUGGESTED' ? '#ffffff' : 'transparent',
+                    color: newWindowMode === 'SMART_SUGGESTED' ? 'var(--primary-800)' : 'var(--slate-600)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                  }}
+                >
+                  <Sparkles size={13} color="var(--primary-700)" /> Smart Suggested
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewWindowMode('MANUAL')}
+                  style={{
+                    padding: '4px 10px',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    borderRadius: '4px',
+                    border: 'none',
+                    backgroundColor: newWindowMode === 'MANUAL' ? '#ffffff' : 'transparent',
+                    color: newWindowMode === 'MANUAL' ? 'var(--slate-900)' : 'var(--slate-600)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Set Manually
+                </button>
+              </div>
+            </div>
+
+            {newWindowMode === 'SMART_SUGGESTED' ? (
+              <div style={{ backgroundColor: '#ffffff', border: '1px solid #bbf7d0', borderRadius: '6px', padding: '12px 14px' }}>
+                {isFetchingSuggestion ? (
+                  <div style={{ fontSize: '0.85rem', color: 'var(--slate-500)' }}>Analyzing agronomic perishability...</div>
+                ) : smartSuggestion ? (
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Clock size={16} color="#15803d" />
+                        <span style={{ fontSize: '1rem', fontWeight: 800, color: '#15803d' }}>
+                          Recommended: {smartSuggestion.suggested_hours} Hours
+                        </span>
+                      </div>
+                      <Badge variant={smartSuggestion.perishability === 'HIGH' || smartSuggestion.perishability === 'VERY_HIGH' ? 'warning' : 'success'}>
+                        {smartSuggestion.perishability} Perishability
+                      </Badge>
+                    </div>
+                    <p style={{ margin: '0 0 6px', fontSize: '0.82rem', color: 'var(--slate-600)', lineHeight: 1.45 }}>
+                      <strong>Agronomic Reasoning:</strong> {smartSuggestion.reason}
+                    </p>
+                    <div style={{ fontSize: '0.74rem', color: 'var(--slate-500)', fontStyle: 'italic' }}>
+                      ℹ️ Transparent agronomic advisory. Does not guarantee absolute shelf life.
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '0.85rem', color: 'var(--slate-600)' }}>
+                    Standard 10-hour collection window recommended for {newCrop}.
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                  {['6', '10', '12', '24', '48'].map((hr) => (
+                    <button
+                      key={hr}
+                      type="button"
+                      onClick={() => setNewDurationHours(hr)}
+                      style={{
+                        padding: '6px 14px',
+                        borderRadius: '6px',
+                        border: newDurationHours === hr ? '2px solid var(--primary-600)' : '1px solid var(--border-color)',
+                        backgroundColor: newDurationHours === hr ? '#ecfdf5' : '#ffffff',
+                        color: newDurationHours === hr ? 'var(--primary-800)' : 'var(--slate-700)',
+                        fontSize: '0.82rem',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      {hr} Hours
+                    </button>
+                  ))}
+                </div>
+                <Input
+                  type="number"
+                  step="any"
+                  min="1"
+                  label="Custom Duration (Hours)"
+                  value={newDurationHours}
+                  onChange={(e) => setNewDurationHours(e.target.value)}
+                  placeholder="e.g. 18"
+                />
+              </div>
+            )}
+
+            {/* Live Calculated Timeline Preview */}
+            <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px dashed var(--border-color)', display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--slate-600)' }}>
+              <span><strong>Starts:</strong> Right Now</span>
+              <span>
+                <strong>Deadline:</strong>{' '}
+                {new Date(Date.now() + (parseFloat(newDurationHours) || 10) * 3600 * 1000).toLocaleString('en-IN', {
+                  day: 'numeric',
+                  month: 'short',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  hour12: true,
+                })}
+              </span>
+            </div>
+          </div>
+
+          {/* Pricing & Grade */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
             <div>
               <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-700)', marginBottom: '6px' }}>
@@ -2532,7 +3493,7 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
               </label>
               <Input
                 type="number"
-                placeholder="e.g. 1950"
+                placeholder="e.g. 25"
                 value={newExpectedPrice}
                 onChange={(e) => setNewExpectedPrice(e.target.value)}
                 required
@@ -2540,16 +3501,29 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
             </div>
           </div>
 
-          <div>
-            <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-700)', marginBottom: '6px' }}>
-              Collection Center / Packhouse Location *
-            </label>
-            <Input
-              placeholder="e.g. Pimpalgaon Baswant APMC Packhouse Hub"
-              value={newLocation}
-              onChange={(e) => setNewLocation(e.target.value)}
-              required
-            />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-700)', marginBottom: '6px' }}>
+                Target Quality Grade
+              </label>
+              <Select
+                options={QUALITY_OPTIONS}
+                value={newQualityGrade}
+                onChange={(e) => setNewQualityGrade(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-700)', marginBottom: '6px' }}>
+                Collection Packhouse Location *
+              </label>
+              <Input
+                placeholder="e.g. Pimpalgaon Baswant APMC Packhouse Hub"
+                value={newLocation}
+                onChange={(e) => setNewLocation(e.target.value)}
+                required
+              />
+            </div>
           </div>
 
           <div
@@ -2561,10 +3535,260 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
               borderRadius: 'var(--radius-md)',
             }}
           >
-            ℹ️ This pool will be initialized in <strong>DRAFT</strong> status. You can add individual farmer contributions and check equity percentages before publishing to buyers.
+            ℹ️ This pool will be initialized in <strong>OPEN</strong> collection status. Farmers can commit harvests up to the target quota until the deadline expires.
           </div>
         </form>
       </Modal>
+
+      {/* Modal: Extend Collection Window */}
+      {extendModalOpen && lotToExtend && (
+        <Modal
+          isOpen={extendModalOpen}
+          onClose={() => setExtendModalOpen(false)}
+          title={`Extend Collection Window: Lot #${lotToExtend.id} (${lotToExtend.crop})`}
+          footer={
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <Button variant="outline-primary" onClick={() => setExtendModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                onClick={handleConfirmExtend}
+                disabled={isExtending || !extendHours}
+              >
+                {isExtending ? 'Extending...' : 'Confirm Window Extension'}
+              </Button>
+            </div>
+          }
+        >
+          <form onSubmit={handleConfirmExtend} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div
+              style={{
+                backgroundColor: '#eff6ff',
+                border: '1px solid #bfdbfe',
+                borderRadius: '8px',
+                padding: '12px 14px',
+                fontSize: '0.84rem',
+                color: '#1e40af',
+              }}
+            >
+              ⏱️ <strong>Collection Window Extension:</strong> Reopen this aggregation requirement so member farmers can continue committing remaining harvest volume. All existing commitments remain completely intact.
+            </div>
+
+            <div style={{ backgroundColor: 'var(--slate-50)', padding: '12px 14px', borderRadius: '8px', border: '1px solid var(--border-color)', fontSize: '0.84rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <span style={{ color: 'var(--slate-600)' }}>Current Collection Start:</span>
+                <strong>{formatDateTime(lotToExtend.collection_start_at)}</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px' }}>
+                <span style={{ color: 'var(--slate-600)' }}>Current Deadline:</span>
+                <strong style={{ color: '#b45309' }}>{formatDateTime(lotToExtend.collection_deadline_at)}</strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: 'var(--slate-600)' }}>Previous Extensions:</span>
+                <strong>{lotToExtend.deadline_extension_count || 0} times</strong>
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-700)', marginBottom: '8px' }}>
+                Select Extension Duration
+              </label>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                {['6', '10', '12', '24', '48'].map((hr) => (
+                  <button
+                    key={hr}
+                    type="button"
+                    onClick={() => setExtendHours(hr)}
+                    style={{
+                      padding: '6px 14px',
+                      borderRadius: '6px',
+                      border: extendHours === hr ? '2px solid var(--primary-600)' : '1px solid var(--border-color)',
+                      backgroundColor: extendHours === hr ? '#ecfdf5' : '#ffffff',
+                      color: extendHours === hr ? 'var(--primary-800)' : 'var(--slate-700)',
+                      fontSize: '0.82rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    +{hr} Hours
+                  </button>
+                ))}
+              </div>
+              <Input
+                type="number"
+                step="any"
+                min="1"
+                label="Custom Extension Hours"
+                value={extendHours}
+                onChange={(e) => setExtendHours(e.target.value)}
+                placeholder="e.g. 10"
+                required
+              />
+            </div>
+
+            {/* Calculated New Deadline Preview */}
+            <div
+              style={{
+                backgroundColor: '#f0fdf4',
+                border: '1px solid #bbf7d0',
+                borderRadius: '8px',
+                padding: '12px 14px',
+                fontSize: '0.85rem',
+                color: '#166534',
+              }}
+            >
+              <strong>New Calculated Deadline: </strong>
+              <span>
+                {(() => {
+                  try {
+                    const baseDate = lotToExtend.collection_deadline_at ? new Date(lotToExtend.collection_deadline_at) : new Date();
+                    const effectiveBase = baseDate > new Date() ? baseDate : new Date();
+                    const newDeadline = new Date(effectiveBase.getTime() + (parseFloat(extendHours) || 10) * 3600 * 1000);
+                    return formatDateTime(newDeadline.toISOString());
+                  } catch (e) {
+                    return '—';
+                  }
+                })()}
+              </span>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* Modal: Farm Gate Batch Traceability */}
+      {traceabilityModalOpen && selectedTraceabilityBatch && (
+        <Modal
+          isOpen={traceabilityModalOpen}
+          onClose={() => setTraceabilityModalOpen(false)}
+          title={`Batch Traceability & Farmer Equity: ${selectedTraceabilityBatch.crop}`}
+          footer={
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <Button variant="primary" onClick={() => setTraceabilityModalOpen(false)}>
+                Close Traceability Audit
+              </Button>
+            </div>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <div
+              style={{
+                backgroundColor: '#f0fdf4',
+                border: '1px solid #bbf7d0',
+                borderRadius: '8px',
+                padding: '14px 16px',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '12px',
+              }}
+            >
+              <div>
+                <h4 style={{ margin: '0 0 2px', fontSize: '1rem', fontWeight: 800, color: '#166534' }}>
+                  {selectedTraceabilityBatch.crop} Consolidated Batch Audit
+                </h4>
+                <div style={{ fontSize: '0.82rem', color: '#14532d' }}>
+                  Verified Volume: <strong>{selectedTraceabilityBatch.verified_quantity} {selectedTraceabilityBatch.unit}</strong> • Available for Sale: <strong>{selectedTraceabilityBatch.available_for_sale} {selectedTraceabilityBatch.unit}</strong>
+                </div>
+              </div>
+              <Badge variant={selectedTraceabilityBatch.sell_urgency?.level === 'SELL URGENTLY' ? 'warning' : 'success'}>
+                {selectedTraceabilityBatch.sell_urgency?.level || 'STABLE'}
+              </Badge>
+            </div>
+
+            {/* List of Batches */}
+            {(!selectedTraceabilityBatch.batches || selectedTraceabilityBatch.batches.length === 0) ? (
+              <div style={{ textAlign: 'center', padding: '24px', color: 'var(--slate-500)' }}>
+                No active batches found for {selectedTraceabilityBatch.crop}.
+              </div>
+            ) : (
+              selectedTraceabilityBatch.batches.map((batch) => (
+                <div
+                  key={batch.lot_id}
+                  style={{
+                    border: '1px solid var(--border-color)',
+                    borderRadius: '8px',
+                    padding: '16px',
+                    backgroundColor: '#ffffff',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--slate-900)' }}>
+                          Pool Lot #{batch.lot_id}: {batch.variety}
+                        </span>
+                        <Badge variant="default">{batch.quality_grade}</Badge>
+                        <Badge variant={batch.status === 'FILLED' ? 'success' : batch.status === 'EXPIRED' ? 'warning' : 'info'}>
+                          {batch.status}
+                        </Badge>
+                      </div>
+                      <div style={{ fontSize: '0.78rem', color: 'var(--slate-500)', marginTop: '3px' }}>
+                        Facility: {batch.storage_status === 'STORED' ? 'Cold Storage' : 'Ambient Packhouse'} • Deadline: {formatDateTime(batch.collection_deadline_at)}
+                      </div>
+                    </div>
+
+                    <div style={{ fontSize: '0.82rem', textAlign: 'right' }}>
+                      <div>Target: <strong>{batch.target_quantity} kg</strong></div>
+                      <div style={{ color: '#15803d', fontWeight: 700 }}>Verified: {batch.verified_quantity} kg</div>
+                    </div>
+                  </div>
+
+                  {/* Members Table */}
+                  {(!batch.members || batch.members.length === 0) ? (
+                    <div style={{ fontSize: '0.8rem', color: 'var(--slate-400)', fontStyle: 'italic', padding: '8px 0' }}>
+                      No member harvest pledges recorded yet in this pool.
+                    </div>
+                  ) : (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8rem', textAlign: 'left' }}>
+                        <thead>
+                          <tr style={{ backgroundColor: 'var(--slate-50)', borderBottom: '1px solid var(--border-color)' }}>
+                            <th style={{ padding: '8px 10px', color: 'var(--slate-600)' }}>Farmer</th>
+                            <th style={{ padding: '8px 10px', color: 'var(--slate-600)' }}>Quantity</th>
+                            <th style={{ padding: '8px 10px', color: 'var(--slate-600)' }}>Grade</th>
+                            <th style={{ padding: '8px 10px', color: 'var(--slate-600)' }}>Equity Share</th>
+                            <th style={{ padding: '8px 10px', color: 'var(--slate-600)' }}>Verification Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {batch.members.map((mem) => (
+                            <tr key={mem.id} style={{ borderBottom: '1px solid var(--border-color)' }}>
+                              <td style={{ padding: '8px 10px', fontWeight: 600 }}>
+                                {mem.farmer_name}
+                                <div style={{ fontSize: '0.72rem', color: 'var(--slate-400)' }}>{mem.phone || `MEM-${mem.id}`}</div>
+                              </td>
+                              <td style={{ padding: '8px 10px', fontWeight: 700 }}>
+                                {mem.quantity} {mem.unit}
+                              </td>
+                              <td style={{ padding: '8px 10px' }}>{mem.quality_grade}</td>
+                              <td style={{ padding: '8px 10px', color: '#1d4ed8', fontWeight: 600 }}>{mem.share_percentage}%</td>
+                              <td style={{ padding: '8px 10px' }}>
+                                <Badge
+                                  variant={
+                                    mem.contribution_status === 'VERIFIED'
+                                      ? 'success'
+                                      : mem.contribution_status === 'RECEIVED'
+                                      ? 'info'
+                                      : 'warning'
+                                  }
+                                >
+                                  {mem.contribution_status}
+                                </Badge>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        </Modal>
+      )}
 
       {/* 6. Modal: Apply to Join FPO */}
       {selectedOrgForJoin && (

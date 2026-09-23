@@ -58,6 +58,8 @@ def create_app(config_class=Config):
     # Auto-create tables and seed demo accounts for all 5 roles
     with app.app_context():
         db.create_all()
+        from utils.migrate_aggregation import run_aggregation_migration
+        run_aggregation_migration()
         seed_demo_accounts()
 
     @app.route('/uploads/crop_lots/<path:filename>')

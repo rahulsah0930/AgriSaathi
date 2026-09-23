@@ -1,10 +1,27 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Blueprint, request, jsonify
 from models import db
 from models.lot import CropLot, FPOLotMember
 from models.user import User, FPOProfile
+from services.fpo_aggregation_service import (
+    get_smart_collection_duration,
+    evaluate_aggregation_status,
+    calculate_sell_urgency
+)
 
 fpo_bp = Blueprint('fpo', __name__, url_prefix='/api/fpo')
+
+
+@fpo_bp.route('/suggest-duration', methods=['GET'])
+def suggest_collection_duration():
+    """Advisory smart duration suggestion based on crop perishability and storage."""
+    crop = request.args.get('crop', 'Tomato')
+    storage_status = request.args.get('storage_status', 'NOT_STORED')
+    target_quantity = request.args.get('target_quantity', type=float)
+    unit = request.args.get('unit', 'kg')
+    suggestion = get_smart_collection_duration(crop, storage_status, target_quantity, unit)
+    return jsonify({'success': True, 'suggestion': suggestion}), 200
+
 
 @fpo_bp.route('/lots', methods=['GET'])
 def get_fpo_lots():
@@ -20,6 +37,21 @@ def get_fpo_lots():
         query = query.filter_by(status=status)
 
     fpo_lots = query.order_by(CropLot.created_at.desc()).all()
+
+    # Authoritative evaluation of deadline and capacity thresholds for all active lots
+    changed_any = False
+    for lot in fpo_lots:
+        old_status = lot.aggregation_status
+        new_status = evaluate_aggregation_status(lot, commit=False)
+        if old_status != new_status:
+            changed_any = True
+
+    if changed_any:
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
     return jsonify({
         'success': True,
         'count': len(fpo_lots),
@@ -33,6 +65,9 @@ def get_fpo_lot_detail(lot_id):
     lot = CropLot.query.get(lot_id)
     if not lot or lot.seller_type != 'FPO':
         return jsonify({'success': False, 'error': 'Not Found', 'message': f'FPO Lot #{lot_id} not found.'}), 404
+
+    # Run authoritative lifecycle check
+    evaluate_aggregation_status(lot, commit=True)
 
     lot_dict = lot.to_dict()
     total_qty = lot.quantity or 0.0
@@ -81,8 +116,6 @@ def get_fpo_lot_detail(lot_id):
     }), 200
 
 
-
-
 @fpo_bp.route('/lots', methods=['POST'])
 def create_fpo_lot():
     data = request.get_json() or {}
@@ -98,6 +131,17 @@ def create_fpo_lot():
     fpo_name = user.fpo_profile.fpo_name if (user and user.fpo_profile) else 'Sahyadri Farmers Producer Co. Ltd.'
 
     try:
+        target_qty = float(data.get('target_quantity', data.get('quantity', 2000.0)))
+        duration_hours = float(data.get('duration_hours', 10.0))
+        window_source = data.get('collection_window_source', 'MANUAL')
+
+        start_time = datetime.utcnow()
+        deadline_time = start_time + timedelta(hours=duration_hours)
+
+        delivery_deadline = None
+        if data.get('delivery_deadline_hours'):
+            delivery_deadline = start_time + timedelta(hours=float(data['delivery_deadline_hours']))
+
         new_lot = CropLot(
             seller_id=seller_id,
             seller_type='FPO',
@@ -105,15 +149,21 @@ def create_fpo_lot():
             seller_verification_status=user.verification_status if user else 'VERIFIED',
             crop=data['crop'].strip(),
             variety=data.get('variety', 'Garwa / Aggregated').strip(),
-            quantity=float(data.get('quantity', 0)),
-            unit=data.get('unit', 'quintal'),
+            quantity=0.0, # Starts at 0 committed; grows as farmers contribute
+            target_quantity=target_qty,
+            unit=data.get('unit', 'kg'),
             quality_grade=data.get('quality_grade', 'Grade A'),
-            harvest_date=str(data.get('harvest_date', '2026-09-05')),
+            harvest_date=str(data.get('harvest_date', datetime.utcnow().strftime('%Y-%m-%d'))),
             location=data['location'].strip(),
             district=data['district'].strip(),
             expected_price=float(data['expected_price']),
             storage_status=data.get('storage_status', 'NOT_STORED'),
-            status='DRAFT' # Starts in DRAFT until members are aggregated and lot is published
+            collection_start_at=start_time,
+            collection_deadline_at=deadline_time,
+            delivery_deadline_at=delivery_deadline,
+            collection_window_source=window_source,
+            aggregation_status='OPEN',
+            status='ACTIVE'
         )
 
         db.session.add(new_lot)
@@ -121,7 +171,7 @@ def create_fpo_lot():
 
         return jsonify({
             'success': True,
-            'message': 'FPO aggregation lot initiated. Add member contributions now.',
+            'message': f"FPO aggregation requirement for {target_qty} {new_lot.unit} {new_lot.crop} initiated. Collection window open for {duration_hours:g} hours.",
             'lot': new_lot.to_dict()
         }), 201
 
@@ -136,11 +186,29 @@ def add_member_contribution(lot_id):
     if not lot:
         return jsonify({'success': False, 'error': 'Not Found', 'message': f'FPO Lot #{lot_id} not found.'}), 404
 
+    # 1. Authoritative Backend Deadline Check
+    evaluate_aggregation_status(lot, commit=False)
+    now = datetime.utcnow()
+    if lot.collection_deadline_at and now > lot.collection_deadline_at:
+        return jsonify({
+            'success': False,
+            'error': 'Collection Expired',
+            'message': 'Aggregation collection window has expired. New contributions are closed.'
+        }), 400
+
+    # 2. Status Closure Check
+    if lot.aggregation_status in ('FILLED', 'EXPIRED', 'CLOSED', 'CANCELLED'):
+        return jsonify({
+            'success': False,
+            'error': 'Aggregation Closed',
+            'message': f'Aggregation requirement is {lot.aggregation_status}. New contributions cannot be accepted.'
+        }), 400
+
     data = request.get_json() or {}
     farmer_name = data.get('farmer_name', '').strip()
     quantity = data.get('quantity')
 
-    if not farmer_name or not quantity:
+    if not farmer_name or quantity is None:
         return jsonify({'success': False, 'error': 'Validation Error', 'message': 'Farmer name and quantity are required.'}), 400
 
     try:
@@ -148,8 +216,24 @@ def add_member_contribution(lot_id):
         if qty <= 0:
             return jsonify({'success': False, 'error': 'Invalid Quantity', 'message': 'Contribution must be greater than 0.'}), 400
 
+        # 3. Backend Overbooking Prevention Check
+        target_qty = lot.target_quantity if lot.target_quantity is not None else lot.quantity
+        current_committed = sum(m.quantity for m in lot.members)
+        remaining_capacity = max(0.0, round(target_qty - current_committed, 2))
+
+        if qty > remaining_capacity:
+            return jsonify({
+                'success': False,
+                'error': 'Capacity Exceeded',
+                'message': f"Only {remaining_capacity:g} {lot.unit} capacity remains in this aggregation.",
+                'remaining_capacity': remaining_capacity,
+                'target_quantity': target_qty,
+                'committed_quantity': current_committed
+            }), 400
+
         member = FPOLotMember(
             fpo_lot_id=lot.id,
+            farmer_id=data.get('farmer_id') or data.get('user_id'),
             farmer_name=farmer_name,
             farmer_reference_placeholder=data.get('farmer_reference_placeholder', f'FARMER-MEM-{len(lot.members) + 1}'),
             crop=lot.crop,
@@ -160,17 +244,62 @@ def add_member_contribution(lot_id):
         )
 
         db.session.add(member)
+        if member not in lot.members:
+            lot.members.append(member)
+        db.session.flush()
 
-        # Recalibrate parent lot quantity
-        lot.quantity = sum(m.quantity for m in lot.members) + qty
+        # Recalibrate parent lot committed quantity
+        lot.quantity = round(current_committed + qty, 2)
+
+        # Trigger authoritative milestone evaluation (90% CLOSING_SOON, 100% FILLED) with idempotent notification
+        evaluate_aggregation_status(lot, commit=False)
+
         db.session.commit()
 
         return jsonify({
             'success': True,
-            'message': f"Added {qty} {lot.unit} contribution from {farmer_name}.",
+            'message': f"Added {qty:g} {lot.unit} contribution from {farmer_name}.",
             'member': member.to_dict(),
-            'total_aggregated_quantity': lot.quantity
+            'total_aggregated_quantity': lot.quantity,
+            'aggregation_status': lot.aggregation_status,
+            'lot': lot.to_dict()
         }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': 'Server Error', 'message': str(e)}), 500
+
+
+@fpo_bp.route('/lots/<int:lot_id>/members/<int:member_id>/status', methods=['PUT'])
+def update_member_status(lot_id, member_id):
+    """FPO updates member contribution lifecycle: PLEDGED -> RECEIVED -> VERIFIED."""
+    lot = CropLot.query.get(lot_id)
+    member = FPOLotMember.query.filter_by(id=member_id, fpo_lot_id=lot_id).first()
+
+    if not lot or not member:
+        return jsonify({'success': False, 'error': 'Not Found', 'message': 'Lot or member record not found.'}), 404
+
+    data = request.get_json() or {}
+    new_status = data.get('status') or data.get('contribution_status')
+
+    valid_statuses = ('PLEDGED', 'RECEIVED', 'VERIFIED')
+    if new_status not in valid_statuses:
+        return jsonify({
+            'success': False,
+            'error': 'Invalid Status',
+            'message': f"Status must be one of {', '.join(valid_statuses)}."
+        }), 400
+
+    try:
+        member.contribution_status = new_status
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'message': f"Farmer contribution status updated to {new_status}.",
+            'member': member.to_dict(),
+            'lot': lot.to_dict()
+        }), 200
 
     except Exception as e:
         db.session.rollback()
@@ -190,13 +319,15 @@ def remove_member_contribution(lot_id, member_id):
         db.session.flush()
 
         # Recalculate total quantity
-        lot.quantity = sum(m.quantity for m in lot.members)
+        lot.quantity = round(sum(m.quantity for m in lot.members), 2)
+        evaluate_aggregation_status(lot, commit=False)
         db.session.commit()
 
         return jsonify({
             'success': True,
             'message': f"Member contribution removed. New total: {lot.quantity} {lot.unit}.",
-            'total_aggregated_quantity': lot.quantity
+            'total_aggregated_quantity': lot.quantity,
+            'lot': lot.to_dict()
         }), 200
 
     except Exception as e:
@@ -224,6 +355,178 @@ def publish_fpo_lot(lot_id):
         'success': True,
         'message': f'FPO Lot #{lot_id} successfully published with {len(lot.members)} member contributions ({lot.quantity} {lot.unit})!',
         'lot': lot.to_dict()
+    }), 200
+
+
+@fpo_bp.route('/lots/<int:lot_id>/extend', methods=['POST'])
+def extend_aggregation_window(lot_id):
+    """FPO extends collection window for an aggregation."""
+    lot = CropLot.query.get(lot_id)
+    if not lot or lot.seller_type != 'FPO':
+        return jsonify({'success': False, 'error': 'Not Found', 'message': f'FPO Lot #{lot_id} not found.'}), 404
+
+    data = request.get_json() or {}
+    extension_hours = float(data.get('extension_hours', 10.0))
+
+    if extension_hours <= 0:
+        return jsonify({'success': False, 'error': 'Invalid Duration', 'message': 'Extension hours must be greater than 0.'}), 400
+
+    try:
+        now = datetime.utcnow()
+        base_time = max(now, lot.collection_deadline_at or now)
+        lot.collection_deadline_at = base_time + timedelta(hours=extension_hours)
+        lot.deadline_extension_count = (lot.deadline_extension_count or 0) + 1
+        lot.deadline_notified_at = None # Reset so future expiry sends single notification
+
+        # Re-evaluate status
+        evaluate_aggregation_status(lot, commit=False)
+        lot.status = 'ACTIVE'
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'message': f"Collection window for {lot.crop} extended by {extension_hours:g} hours.",
+            'lot': lot.to_dict()
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': 'Server Error', 'message': str(e)}), 500
+
+
+@fpo_bp.route('/lots/<int:lot_id>/proceed', methods=['POST'])
+def proceed_with_collected_quantity(lot_id):
+    """FPO finalizes aggregation with existing collected quantity and closes pool for new pledges."""
+    lot = CropLot.query.get(lot_id)
+    if not lot or lot.seller_type != 'FPO':
+        return jsonify({'success': False, 'error': 'Not Found', 'message': f'FPO Lot #{lot_id} not found.'}), 404
+
+    try:
+        lot.aggregation_status = 'CLOSED'
+        lot.status = 'ACTIVE' # Ready on marketplace for buyers
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'message': f"Aggregation #{lot.id} finalized with collected quantity of {lot.quantity:g} {lot.unit}. Marketplace listing active.",
+            'lot': lot.to_dict()
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': 'Server Error', 'message': str(e)}), 500
+
+
+@fpo_bp.route('/lots/<int:lot_id>/cancel', methods=['POST'])
+def cancel_aggregation(lot_id):
+    """FPO cancels an aggregation while preserving historical records."""
+    lot = CropLot.query.get(lot_id)
+    if not lot or lot.seller_type != 'FPO':
+        return jsonify({'success': False, 'error': 'Not Found', 'message': f'FPO Lot #{lot_id} not found.'}), 404
+
+    try:
+        lot.aggregation_status = 'CANCELLED'
+        lot.status = 'CANCELLED'
+        db.session.commit()
+
+        return jsonify({
+            'success': True,
+            'message': f"Aggregation #{lot.id} cancelled. Historical record preserved.",
+            'lot': lot.to_dict()
+        }), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'error': 'Server Error', 'message': str(e)}), 500
+
+
+@fpo_bp.route('/inventory', methods=['GET'])
+def get_fpo_inventory():
+    """Consolidated FPO Crop Inventory with sell urgency indicator and farmer traceability."""
+    seller_id = request.args.get('seller_id')
+    query = CropLot.query.filter_by(seller_type='FPO')
+    if seller_id and seller_id.isdigit():
+        query = query.filter_by(seller_id=int(seller_id))
+
+    lots = query.order_by(CropLot.created_at.desc()).all()
+
+    # Re-evaluate statuses
+    for lot in lots:
+        evaluate_aggregation_status(lot, commit=False)
+
+    crop_groups = {}
+    for lot in lots:
+        c = lot.crop.strip()
+        if c not in crop_groups:
+            crop_groups[c] = {
+                'crop': c,
+                'unit': lot.unit or 'kg',
+                'target_quantity': 0.0,
+                'committed_quantity': 0.0,
+                'received_quantity': 0.0,
+                'verified_quantity': 0.0,
+                'available_for_sale': 0.0,
+                'active_pools_count': 0,
+                'storage_status': lot.storage_status or 'NOT_STORED',
+                'batches': []
+            }
+
+        group = crop_groups[c]
+        d = lot.to_dict()
+        group['target_quantity'] += d['target_quantity']
+        group['committed_quantity'] += d['committed_quantity']
+        group['received_quantity'] += d['received_quantity']
+        group['verified_quantity'] += d['verified_quantity']
+        group['available_for_sale'] += d['available_for_sale']
+        if lot.aggregation_status in ('OPEN', 'CLOSING_SOON'):
+            group['active_pools_count'] += 1
+
+        # Traceability details for each lot batch
+        group['batches'].append({
+            'lot_id': lot.id,
+            'variety': lot.variety,
+            'aggregation_status': lot.aggregation_status,
+            'lot_status': lot.status,
+            'quality_grade': lot.quality_grade,
+            'storage_status': lot.storage_status,
+            'location': lot.location,
+            'created_at': d['created_at'],
+            'target_quantity': d['target_quantity'],
+            'committed_quantity': d['committed_quantity'],
+            'received_quantity': d['received_quantity'],
+            'verified_quantity': d['verified_quantity'],
+            'contributing_farmers': [
+                {
+                    'farmer_name': m.farmer_name,
+                    'farmer_reference': m.farmer_reference_placeholder or f'MEM-{m.id}',
+                    'quantity': m.quantity,
+                    'unit': m.unit,
+                    'quality_grade': m.quality_grade,
+                    'contribution_status': m.contribution_status,
+                    'created_at': m.created_at.isoformat() if m.created_at else None
+                } for m in (lot.members or [])
+            ]
+        })
+
+    # Calculate sell urgency advisory per crop
+    consolidated_inventory = []
+    for crop_name, g in crop_groups.items():
+        g['target_quantity'] = round(g['target_quantity'], 2)
+        g['committed_quantity'] = round(g['committed_quantity'], 2)
+        g['received_quantity'] = round(g['received_quantity'], 2)
+        g['verified_quantity'] = round(g['verified_quantity'], 2)
+        g['available_for_sale'] = round(g['available_for_sale'], 2)
+
+        urgency = calculate_sell_urgency(crop_name, g['storage_status'], g['available_for_sale'])
+        g['urgency'] = urgency['priority']
+        g['urgency_badge'] = urgency['badge_variant']
+        g['urgency_reason'] = urgency['reason']
+        consolidated_inventory.append(g)
+
+    return jsonify({
+        'success': True,
+        'count': len(consolidated_inventory),
+        'inventory': consolidated_inventory
     }), 200
 
 

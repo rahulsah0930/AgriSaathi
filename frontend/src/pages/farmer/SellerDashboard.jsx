@@ -155,10 +155,14 @@ export const SellerDashboard = ({
         />
         <StatCard
           label={isFPO ? 'Aggregated Produce' : 'Active Crop Lots'}
-          value={isFPO ? `${crop_lots.length} Lots` : `${crop_lots.length} Active Lots`}
+          value={isFPO ? `${crop_lots.length} Pools` : `${crop_lots.length} Active Lots`}
           helper={
             isFPO
-              ? (crop_lots.length > 0 ? `${crop_lots.length} Active Aggregation Pools` : '0 Active Pools')
+              ? (() => {
+                  const totalCommitted = crop_lots.reduce((acc, l) => acc + (l.committed_quantity || l.quantity || 0), 0);
+                  const totalTarget = crop_lots.reduce((acc, l) => acc + (l.target_quantity || l.quantity || 0), 0);
+                  return `${totalCommitted.toLocaleString('en-IN')} kg committed / ${totalTarget.toLocaleString('en-IN')} kg target`;
+                })()
               : (crop_lots.length > 0 ? crop_lots.map((l) => l.crop).slice(0, 3).join(', ') : 'No crop lots listed yet')
           }
           icon={Package}
@@ -261,66 +265,161 @@ export const SellerDashboard = ({
       >
         {crop_lots.length > 0 ? (
           <Table
-            columns={[
-              {
-                header: 'Crop / Variety',
-                render: (row) => (
-                  <div>
-                    <strong style={{ color: 'var(--slate-900)' }}>{row.crop}</strong>
-                    <div style={{ fontSize: '0.785rem', color: 'var(--slate-500)' }}>{row.variety} • {row.quality_grade}</div>
-                  </div>
-                ),
-              },
-              {
-                header: 'Quantity',
-                render: (row) => (
-                  <span style={{ fontWeight: 600 }}>
-                    {row.quantity.toLocaleString()} {row.unit}
-                  </span>
-                ),
-              },
-              {
-                header: 'Harvest Date',
-                render: (row) => (
-                  <span style={{ fontSize: '0.875rem', color: 'var(--slate-600)' }}>
-                    {row.harvest_date}
-                  </span>
-                ),
-              },
-              {
-                header: 'Expected Rate',
-                render: (row) => (
-                  <span style={{ fontWeight: 700, color: 'var(--slate-800)' }}>
-                    ₹{row.expected_price}/kg
-                  </span>
-                ),
-              },
-              {
-                header: 'Status',
-                render: (row) => <StatusBadge status={row.status} />,
-              },
-              {
-                header: 'Offers',
-                render: (row) => (
-                  <Badge variant={row.offers_count > 0 ? 'success' : 'neutral'}>
-                    {row.offers_count} {row.offers_count === 1 ? 'Offer' : 'Offers'}
-                  </Badge>
-                ),
-              },
-              {
-                header: 'Actions',
-                align: 'right',
-                render: (row) => (
-                  <Button
-                    size="sm"
-                    variant="outline-primary"
-                    onClick={() => onNavigate('my-lots')}
-                  >
-                    Manage
-                  </Button>
-                ),
-              },
-            ]}
+            columns={
+              isFPO
+                ? [
+                    {
+                      header: 'Crop / Variety',
+                      render: (row) => (
+                        <div>
+                          <strong style={{ color: 'var(--slate-900)' }}>{row.crop}</strong>
+                          <div style={{ fontSize: '0.785rem', color: 'var(--slate-500)' }}>
+                            {row.variety} • {row.quality_grade}
+                          </div>
+                        </div>
+                      ),
+                    },
+                    {
+                      header: 'Target Quota',
+                      render: (row) => (
+                        <span style={{ fontWeight: 600 }}>
+                          {(row.target_quantity || row.quantity).toLocaleString()} {row.unit}
+                        </span>
+                      ),
+                    },
+                    {
+                      header: 'Committed Progress',
+                      render: (row) => {
+                        const pct = row.percentage_filled !== undefined ? row.percentage_filled : Math.min(100, Math.round(((row.committed_quantity || row.quantity) / (row.target_quantity || row.quantity)) * 100));
+                        return (
+                          <div>
+                            <span style={{ fontWeight: 700, color: '#1d4ed8' }}>
+                              {(row.committed_quantity !== undefined ? row.committed_quantity : row.quantity).toLocaleString()} {row.unit}
+                            </span>
+                            <span style={{ fontSize: '0.75rem', color: 'var(--slate-500)', marginLeft: '4px' }}>
+                              ({pct}%)
+                            </span>
+                          </div>
+                        );
+                      },
+                    },
+                    {
+                      header: 'Collection Window',
+                      render: (row) => {
+                        if (row.time_remaining_seconds !== undefined && row.time_remaining_seconds !== null) {
+                          if (row.time_remaining_seconds <= 0) {
+                            return <span style={{ fontSize: '0.8rem', color: '#b91c1c', fontWeight: 600 }}>Window Ended</span>;
+                          }
+                          const hrs = Math.floor(row.time_remaining_seconds / 3600);
+                          const mins = Math.floor((row.time_remaining_seconds % 3600) / 60);
+                          return (
+                            <span style={{ fontSize: '0.8rem', color: 'var(--slate-700)', fontWeight: 600 }}>
+                              {hrs > 0 ? `${hrs}h ${mins}m left` : `${mins}m left`}
+                            </span>
+                          );
+                        }
+                        return <span style={{ fontSize: '0.8rem', color: 'var(--slate-500)' }}>—</span>;
+                      },
+                    },
+                    {
+                      header: 'Status',
+                      render: (row) => (
+                        <StatusBadge
+                          status={
+                            row.aggregation_status === 'FILLED'
+                              ? 'COMPLETED'
+                              : row.aggregation_status === 'EXPIRED'
+                              ? 'EXPIRED'
+                              : row.aggregation_status === 'CLOSING_SOON'
+                              ? 'IN_PROGRESS'
+                              : row.status
+                          }
+                        />
+                      ),
+                    },
+                    {
+                      header: 'Offers',
+                      render: (row) => (
+                        <Badge variant={row.offers_count > 0 ? 'success' : 'neutral'}>
+                          {row.offers_count} {row.offers_count === 1 ? 'Offer' : 'Offers'}
+                        </Badge>
+                      ),
+                    },
+                    {
+                      header: 'Actions',
+                      align: 'right',
+                      render: (row) => (
+                        <Button
+                          size="sm"
+                          variant="outline-primary"
+                          onClick={() => onNavigate('fpo-aggregation')}
+                        >
+                          Manage Pool
+                        </Button>
+                      ),
+                    },
+                  ]
+                : [
+                    {
+                      header: 'Crop / Variety',
+                      render: (row) => (
+                        <div>
+                          <strong style={{ color: 'var(--slate-900)' }}>{row.crop}</strong>
+                          <div style={{ fontSize: '0.785rem', color: 'var(--slate-500)' }}>{row.variety} • {row.quality_grade}</div>
+                        </div>
+                      ),
+                    },
+                    {
+                      header: 'Quantity',
+                      render: (row) => (
+                        <span style={{ fontWeight: 600 }}>
+                          {row.quantity.toLocaleString()} {row.unit}
+                        </span>
+                      ),
+                    },
+                    {
+                      header: 'Harvest Date',
+                      render: (row) => (
+                        <span style={{ fontSize: '0.875rem', color: 'var(--slate-600)' }}>
+                          {row.harvest_date}
+                        </span>
+                      ),
+                    },
+                    {
+                      header: 'Expected Rate',
+                      render: (row) => (
+                        <span style={{ fontWeight: 700, color: 'var(--slate-800)' }}>
+                          ₹{row.expected_price}/kg
+                        </span>
+                      ),
+                    },
+                    {
+                      header: 'Status',
+                      render: (row) => <StatusBadge status={row.status} />,
+                    },
+                    {
+                      header: 'Offers',
+                      render: (row) => (
+                        <Badge variant={row.offers_count > 0 ? 'success' : 'neutral'}>
+                          {row.offers_count} {row.offers_count === 1 ? 'Offer' : 'Offers'}
+                        </Badge>
+                      ),
+                    },
+                    {
+                      header: 'Actions',
+                      align: 'right',
+                      render: (row) => (
+                        <Button
+                          size="sm"
+                          variant="outline-primary"
+                          onClick={() => onNavigate('my-lots')}
+                        >
+                          Manage
+                        </Button>
+                      ),
+                    },
+                  ]
+            }
             data={crop_lots}
           />
         ) : (
