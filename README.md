@@ -128,12 +128,53 @@ AgriSaathi incorporates an AI-assisted visual screening service (`backend/servic
 
 ---
 
-## 12. FPO Aggregation
+## 12. FPO Aggregation & Time-Bound Collective Pooling
 
-- **Produce Pooling**: Individual smallholder farmers can pool sub-commercial lots (e.g., 500 kg lots) into unified commercial bulk pools (e.g., 10,000 kg container loads).
-- **Member Equity Ledger**: The `fpo_lot_members` table maintains exact records of each contributing farmer's contributed volume, quality grade, and percentage share.
-- **Bulk Contract Execution**: FPO managers negotiate with institutional wholesale buyers on behalf of the cooperative.
-- **Proportional Payouts**: Upon escrow release, sales proceeds and advance deposits are automatically divided proportionally according to each member farmer's contributed share.
+AgriSaathi features a structured, time-bound harvest aggregation system that allows Farmer Producer Organizations (FPOs) to issue formal crop procurement requirements with volume quotas, time-limited collection windows, and farm-gate batch traceability:
+
+### 12.1 Independent Target Quotas & 5 Tracked Quantities
+Unlike standard individual seller listings, FPO aggregation pools define an independent commercial target volume (`target_quantity`) and track produce through five distinct quantities across its physical and quality lifecycle:
+1. **Target Volume (`target_quantity`)**: The total commercial volume required to fulfill institutional buyer contracts or full truckload shipments (e.g., 2,000 kg or 15 MT).
+2. **Committed / Pledged (`committed_quantity`)**: The cumulative harvest volume committed by member farmers through the online portal.
+3. **Physically Received (`received_quantity`)**: The portion of committed produce that has physically arrived and been checked into the FPO packhouse or collection center.
+4. **Quality Verified (`verified_quantity`)**: Produce that has passed physical inspection for weight, moisture content, and quality grade compliance.
+5. **Available for Sale (`available_for_sale`)**: Strictly the verified volume ready for institutional procurement contracts. Produce that is merely pledged or received without quality verification cannot be committed to buyers (`available_for_sale = 0` until verified).
+
+### 12.2 Perishability-Based Collection Window Advisory
+To prevent post-harvest spoilage and packhouse bottlenecks, collection windows can be determined through an agronomic advisory engine (`backend/services/fpo_aggregation_service.py`):
+- **Agronomic Perishability Tiers**:
+  - `VERY_HIGH` (Leafy Vegetables, Strawberry): Rapid 6h–8h collection window.
+  - `HIGH` (Tomato, Guava, Capsicum): 10h–12h collection window under ambient conditions (28°C) to prevent respiration softening, moisture loss, and transit decay.
+  - `MEDIUM` (Pomegranate, Grapes, Citrus): 24h–48h collection window.
+  - `LOW` (Onion, Potato, Grains, Soybean, Pulses): Extended 72h–168h collection windows.
+- **Facility Condition Adaptation**: When stored in a cold chain hub (`STORED`), collection windows are safely extended by a crop-specific multiplier with transparent justification.
+- **FPO Window Selection Modes**: FPOs can choose between:
+  - `[ Smart Suggested Duration ]`: Dynamically fetches suggested duration, perishability rating, and transparent agronomic reasoning with clear disclosures that it serves as an advisory guide.
+  - `[ Set Manually ]`: Quick-selection preset duration chips (6h, 10h, 12h, 24h, 48h) or custom hours input.
+- **Timestamps & Deadlines**: Each pool records `collection_start_at` and `collection_deadline_at`, displayed with a live countdown timer (`time_remaining_seconds`).
+
+### 12.3 Farmer Contribution Pledges & Overbooking Prevention
+- Smallholder farmers discover active FPO aggregation pools in their district and pledge harvest quantities toward open quotas.
+- **Backend Overbooking Enforcement**: The backend rigorously calculates remaining capacity (`target_quantity - committed_quantity`). Any pledge exceeding this capacity is rejected with the exact error: `"Only X kg capacity remains in this aggregation."`
+
+### 12.4 Automatic Closures & Lifecycle State Machine
+Aggregation pools dynamically transition through well-defined lifecycle states:
+- `OPEN`: Pool active and accepting farmer contribution pledges.
+- `CLOSING_SOON`: Automatically triggered when pledged volume reaches **$\ge$ 90%** of target capacity. Exactly **one idempotent notification** is issued to the FPO and participating farmers.
+- `FILLED`: Automatically triggered when pledged volume reaches **100%** of target quota. Contributions are immediately locked, and **one idempotent notification** is issued.
+- `EXPIRED`: Automatically triggered when current time surpasses `collection_deadline_at`. Contributions are blocked, and **one idempotent notification** is issued.
+- **Zero Notification Spam**: Timestamp audit columns (`near_capacity_notified_at`, `filled_notified_at`, `deadline_notified_at`) guarantee that repeated page reloads or status evaluations never generate duplicate alerts.
+
+### 12.5 Post-Deadline FPO Decisions
+When a collection window closes or expires, FPO administrators have explicit lifecycle actions:
+- **Proceed with Collected Quantity (`/api/fpo/lots/<id>/proceed`)**: Finalizes the requirement with current collected volume, updates status to `PROCEEDED`, and keeps the lot available on the buyer marketplace.
+- **Extend Collection Window (`/api/fpo/lots/<id>/extend`)**: Allows the FPO to add hours (e.g., +10h), recalculates a new deadline, reopens contributions (`OPEN`), and increments `deadline_extension_count`.
+- **Cancel Aggregation (`/api/fpo/lots/<id>/cancel`)**: Aborts the aggregation while preserving all historical farmer contribution records and audit trails.
+
+### 12.6 Consolidated Produce Inventory & Farm Gate Traceability
+- **FPO Inventory Hub (`/api/fpo/inventory`)**: A consolidated view aggregating committed, received, verified, and sale-ready volumes across all pools grouped by crop.
+- **Agronomic Sell Urgency**: Classifies inventory as `SELL URGENTLY` (red), `SELL SOON` (amber), or `STABLE` (green) based on commodity perishability, storage facility, and remaining shelf life to guide sales prioritization.
+- **Farm Gate Batch Traceability**: Complete audit modal mapping every consolidated commercial lot back to individual member farmers, contact references, delivered weights, quality grades, and percentage equity shares.
 
 ---
 
@@ -420,8 +461,20 @@ All endpoints return standardized JSON structures. Key operational routes includ
 | `GET` | `/api/lots` | Filterable catalog of published crop produce lots |
 | `POST` | `/api/lots` | Create crop lot with multi-part image upload and AI screening |
 | `GET` | `/api/lots/<id>` | Full lot profile with AI quality report, mandi preview & offers |
-| `GET` | `/api/fpo/pools` | Active FPO produce aggregation pools |
-| `POST` | `/api/fpo/contribute` | Add member farmer produce contribution to an FPO pool |
+| `GET` | `/api/fpo/lots` | Active FPO aggregation pools with live capacity and status evaluation |
+| `POST` | `/api/fpo/lots` | Create aggregation requirement with target quota, window mode & duration |
+| `GET` | `/api/fpo/lots/<id>` | Detail profile of an FPO pool with member breakdown and countdown |
+| `POST` | `/api/fpo/lots/<id>/members` | Pledge member harvest volume with backend overbooking enforcement |
+| `PUT` | `/api/fpo/lots/<id>/members/<id>/status` | Advance contribution status (`PLEDGED` → `RECEIVED` → `VERIFIED`) |
+| `DELETE` | `/api/fpo/lots/<id>/members/<id>` | Remove member contribution from draft/open pool |
+| `POST` | `/api/fpo/lots/<id>/publish` | Publish aggregated commercial lot to public buyer marketplace |
+| `GET` | `/api/fpo/suggest-duration` | Agronomic perishability lookup and collection window advisory |
+| `POST` | `/api/fpo/lots/<id>/extend` | Extend collection deadline by N hours and reopen contributions |
+| `POST` | `/api/fpo/lots/<id>/proceed` | Finalize aggregation with collected volume and proceed to market |
+| `POST` | `/api/fpo/lots/<id>/cancel` | Cancel aggregation pool while preserving historical farmer records |
+| `GET` | `/api/fpo/inventory` | Consolidated produce inventory by crop with sell urgency and batch traceability |
+| `GET` | `/api/fpo/organizations` | Directory of verified Maharashtra FPO cooperatives for farmer discovery |
+| `POST` | `/api/fpo/join-request` | Submit farmer membership application to join an FPO |
 | `GET` | `/api/market-prices` | Mandi prices, 14-day history, and comparative arbitrage matrix |
 | `GET` | `/api/predictions/<crop>` | 7-day ML price forecast with upper/lower uncertainty bounds |
 | `POST` | `/api/recommendations/evaluate` | Net return sale advisor (Sell Now vs Hold vs Cold Storage) |
@@ -448,5 +501,36 @@ All endpoints return standardized JSON structures. Key operational routes includ
 - **Architecture**: 100% Unified Monolithic Architecture. The legacy System 1 and System 2 separation has been retired.
 - **Portals**: All 5 stakeholder portals (Farmer, FPO, Buyer, Warehouse, Government Admin) are implemented, styled, and functional.
 - **Backend**: 15 modular REST API Blueprints registered and verified on Python Flask 3.0.
-- **Verification**: Complete end-to-end user journeys (Produce Listing $\rightarrow$ AI Quality Check $\rightarrow$ Market Discovery $\rightarrow$ Buyer Offer $\rightarrow$ Two-Way Negotiation $\rightarrow$ Agreement $\rightarrow$ Government Escrow Deposit $\rightarrow$ Dispatch Tracking $\rightarrow$ Quality Receipt $\rightarrow$ Escrow Release $\rightarrow$ Grievance Redressal) have been verified.
+- **Verification**: Complete end-to-end user journeys (Produce Listing → AI Quality Check → Market Discovery → Buyer Offer → Two-Way Negotiation → Agreement → Government Escrow Deposit → Dispatch Tracking → Quality Receipt → Escrow Release → Grievance Redressal) have been verified.
 - **Frontend Build**: Tested with Vite 8 (`npm run build` exits cleanly with 0 errors).
+
+---
+
+## 29. Implementation Scope & Prototype vs. Production Reality
+
+To maintain technical transparency, this section distinguishes between what is functional in the prototype codebase, what operates via simulation or local heuristics, and what represents planned future production integrations:
+
+### 29.1 Currently Implemented Functional Features (Working Code)
+- **Unified Stakeholder Authentication**: Role-based authentication (`FARMER`, `FPO`, `BUYER`, `WAREHOUSE`, `ADMIN`) with session validation and 1-click evaluation demo profiles.
+- **Time-Bound FPO Aggregation State Machine**: Full lifecycle tracking (`OPEN`, `CLOSING_SOON`, `FILLED`, `EXPIRED`, `PROCEEDED`, `CANCELLED`), target quota vs committed volume, backend overbooking rejection, and post-deadline actions.
+- **Perishability-Based Window Advisory**: Agronomic calculation engine categorizing crops by perishability with storage facility adjustments.
+- **Farmer Equity & Farm Gate Batch Traceability**: Automated proportional equity share calculations and batch-level traceability modals.
+- **Interactive Two-Way Negotiations**: Bidding, counter-offers, and deal acceptance with chronological audit logs.
+- **Government User Verification Registry**: Multi-tab admin approval queue supporting verified credentials or rejections with mandatory reasons.
+- **Dispute Redressal Logging & Nodal Adjudication**: Filing and resolving commercial disputes with photo uploads and status updates.
+- **Machine Learning Price Forecasting**: Ridge Regression and EMA smoothing calculating 7-day trajectories from historical sequences.
+- **Net Return AI Sale Timing**: Algorithmic comparison between immediate sale, short holding, and cold storage net-backs.
+
+### 29.2 Simulated / Demo Functionality (Current Code Realization)
+- **Government Escrow Ledger**: Implemented as an in-database double-entry transaction record within SQLite/MySQL (`payment_records`). It models the complete two-stage legal state flow (`HELD_BY_GOVT_ESCROW` $\rightarrow$ `RELEASED_TO_SELLER`), but is not connected to a live banking payment gateway or RBI-regulated commercial escrow account.
+- **Logistics & Carrier Dispatch**: Dispatches, carrier names, and tracking numbers are simulated within the transaction entity; there is no live integration with commercial fleet APIs or GPS vehicle sensors.
+- **Mandi Price Feeds**: APMC market prices, 14-day histories, and modal rates are pre-seeded reference datasets reflecting historical Maharashtra mandis, rather than live WebSocket or scraping feeds from real-time mandi gates.
+- **Warehouse IoT Telemetry**: Cold chamber temperatures (°C) and relative humidity (%) are simulated representative metrics rather than real-time Modbus/MQTT hardware sensor streams.
+- **AI Visual Quality Screening**: Evaluates uploaded images using surface heuristic checks (color spectrum, aspect ratio, resolution, morphology rules) with an explicit disclosure that it does not replace official AGMARK laboratory chemical assays.
+
+### 29.3 Planned Future Production Integrations
+- **Banking & Escrow**: Live integration with NPCI / e-RUPI programmable tokens and scheduled commercial bank escrow APIs.
+- **Government Agricultural Market Data**: Real-time integration with the AGMARKNET national portal and Maharashtra State Agricultural Marketing Board (MSAMB) API gateways.
+- **Logistics & Transport**: Integration with ULIP (Unified Logistics Interface Platform) and VAHAN/SARATHI national transport registries for verified vehicle GPS tracking.
+- **Identity & Land Verification**: Direct API connectivity with UIDAI Aadhaar e-KYC, Mahabhulekh (e-Ferfar / 7/12 Land Records), and Digilocker.
+- **Physical Assaying**: Interfacing with NABL-accredited testing laboratories and portable spectroscopic rapid-assay scanners for certified AGMARK grade issuance.
