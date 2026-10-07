@@ -21,18 +21,21 @@ def normalize_database_url(url: str) -> str:
     """
     Normalizes database URLs to be fully SQLAlchemy compatible with psycopg2.
     Specifically handles:
-      - 'postgresql+psycopg://' -> 'postgresql://' (Neon default Python/SQLAlchemy connection strings)
-      - 'postgres+psycopg://'   -> 'postgresql://'
-      - 'postgresql+psycopg3://'-> 'postgresql://'
+      - 'postgresql+psycopg://'  -> 'postgresql://' (Neon default Python/SQLAlchemy connection strings)
+      - 'postgres+psycopg://'    -> 'postgresql://'
+      - 'postgresql+psycopg3://' -> 'postgresql://'
+      - 'postgres+psycopg3://'   -> 'postgresql://'
       - 'postgres://'            -> 'postgresql://' (Heroku/Render legacy scheme)
+    Strips whitespace and surrounding quotes.
+    Case-insensitive scheme replacement.
     Preserves existing postgresql:// and postgresql+psycopg2:// URLs, as well as SQLite.
     """
     if not url:
         return url
-    trimmed = url.strip()
+    trimmed = str(url).strip().strip("'\"")
     pattern = r'^(?:postgres|postgresql)(?:\+(?:psycopg3|psycopg))?://'
-    if re.match(pattern, trimmed):
-        return re.sub(pattern, 'postgresql://', trimmed, count=1)
+    if re.match(pattern, trimmed, flags=re.IGNORECASE):
+        return re.sub(pattern, 'postgresql://', trimmed, count=1, flags=re.IGNORECASE)
     return trimmed
 
 def mask_database_url(url: str) -> str:
@@ -138,6 +141,12 @@ class Config:
         """
         if not cls.IS_PRODUCTION:
             return
+
+        # Dynamically refresh and normalize DATABASE_URL from environment
+        env_db_url = os.getenv('DATABASE_URL')
+        if env_db_url:
+            cls.DATABASE_URL = normalize_database_url(env_db_url)
+            cls.SQLALCHEMY_DATABASE_URI = cls.DATABASE_URL
 
         # 1. Validate DATABASE_URL
         if not cls.DATABASE_URL or not cls.SQLALCHEMY_DATABASE_URI:

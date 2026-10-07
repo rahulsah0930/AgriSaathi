@@ -2,7 +2,7 @@ import os
 from flask import Flask, send_from_directory
 from flask_cors import CORS
 from flask_migrate import Migrate
-from config import Config, mask_database_url
+from config import Config, mask_database_url, normalize_database_url
 from utils.error_handlers import register_error_handlers
 from models import db
 from routes.health_routes import health_bp
@@ -32,6 +32,16 @@ def create_app(config_class=Config):
 
     app = Flask(__name__)
     app.config.from_object(config_class)
+
+    # Explicitly enforce database URI normalization on app.config before engine initialization
+    raw_db_uri = app.config.get('SQLALCHEMY_DATABASE_URI') or os.getenv('DATABASE_URL')
+    if raw_db_uri:
+        app.config['SQLALCHEMY_DATABASE_URI'] = normalize_database_url(raw_db_uri)
+
+    # Safe diagnostic: print ONLY the selected database dialect/driver scheme during startup
+    active_uri = app.config.get('SQLALCHEMY_DATABASE_URI') or ''
+    scheme = active_uri.split('://')[0] if '://' in active_uri else 'unknown'
+    print(f"[AgriSaathi] Database driver selected: {scheme}")
 
     upload_folder = os.path.join(app.root_path, 'uploads', 'crop_lots')
     os.makedirs(upload_folder, exist_ok=True)
