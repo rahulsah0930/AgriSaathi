@@ -63,10 +63,19 @@ class Phase8InfrastructureTestSuite(unittest.TestCase):
         self.assertEqual(norm, raw_url)
 
     def test_03_postgres_url_normalization_and_acceptance(self):
-        """Verify Heroku/Render legacy postgres:// URLs are normalized to postgresql:// for SQLAlchemy."""
+        """Verify Heroku/Render legacy postgres:// and Neon postgresql+psycopg:// URLs are normalized to postgresql:// for SQLAlchemy."""
         legacy_url = "postgres://usr:pwd@host.compute.amazonaws.com:5432/dbname"
         expected = "postgresql://usr:pwd@host.compute.amazonaws.com:5432/dbname"
         self.assertEqual(normalize_database_url(legacy_url), expected)
+
+        # Test Neon SQLAlchemy default format with +psycopg
+        neon_url = "postgresql+psycopg://usr:pwd@ep-cool-fog-123.us-east-2.aws.neon.tech/neondb?sslmode=require"
+        neon_expected = "postgresql://usr:pwd@ep-cool-fog-123.us-east-2.aws.neon.tech/neondb?sslmode=require"
+        self.assertEqual(normalize_database_url(neon_url), neon_expected)
+
+        # Test postgres+psycopg variant
+        postgres_psycopg = "postgres+psycopg://usr:pwd@ep-cool-fog-123.us-east-2.aws.neon.tech/neondb"
+        self.assertEqual(normalize_database_url(postgres_psycopg), "postgresql://usr:pwd@ep-cool-fog-123.us-east-2.aws.neon.tech/neondb")
 
     def test_04_production_refuses_missing_jwt_secret(self):
         """Verify production mode refuses startup if JWT_SECRET_KEY is empty."""

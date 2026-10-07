@@ -19,15 +19,20 @@ INSECURE_SECRETS = {
 
 def normalize_database_url(url: str) -> str:
     """
-    Normalizes database URLs to be fully SQLAlchemy compatible.
-    Specifically handles Heroku/Render/Supabase 'postgres://' prefixes
-    by converting to 'postgresql://'.
+    Normalizes database URLs to be fully SQLAlchemy compatible with psycopg2.
+    Specifically handles:
+      - 'postgresql+psycopg://' -> 'postgresql://' (Neon default Python/SQLAlchemy connection strings)
+      - 'postgres+psycopg://'   -> 'postgresql://'
+      - 'postgresql+psycopg3://'-> 'postgresql://'
+      - 'postgres://'            -> 'postgresql://' (Heroku/Render legacy scheme)
+    Preserves existing postgresql:// and postgresql+psycopg2:// URLs, as well as SQLite.
     """
     if not url:
         return url
     trimmed = url.strip()
-    if trimmed.startswith('postgres://'):
-        return 'postgresql://' + trimmed[len('postgres://'):]
+    pattern = r'^(?:postgres|postgresql)(?:\+(?:psycopg3|psycopg))?://'
+    if re.match(pattern, trimmed):
+        return re.sub(pattern, 'postgresql://', trimmed, count=1)
     return trimmed
 
 def mask_database_url(url: str) -> str:
