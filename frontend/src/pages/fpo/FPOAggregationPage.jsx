@@ -10,6 +10,7 @@ import {
   Modal,
   LoadingState,
   EmptyState,
+  CommodityAutocomplete,
 } from '../../components/common';
 import {
   Users,
@@ -373,6 +374,19 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
     }
   }, [createPoolModalOpen, newCrop, newStorageStatus, fetchSmartSuggestion]);
 
+  const calculateClosingTime = (hours) => {
+    const h = parseFloat(hours) || 12;
+    const closingDate = new Date(Date.now() + h * 3600 * 1000);
+    return closingDate.toLocaleString('en-IN', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true,
+    }).replace(',', ' •');
+  };
+
   // Fetch Consolidated FPO Produce Inventory
   const fetchInventory = useCallback(async () => {
     setIsInventoryLoading(true);
@@ -518,8 +532,9 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
     if (!selectedLotId || !memberFarmerName || !memberQuantity) return;
 
     const enteredQty = parseFloat(memberQuantity);
-    if (selectedLot?.remaining_capacity !== undefined && enteredQty > selectedLot.remaining_capacity) {
-      alert(`Only ${selectedLot.remaining_capacity} ${selectedLot.unit} capacity remains in this aggregation.`);
+    const remCapacity = selectedLot?.remaining_capacity !== undefined ? selectedLot.remaining_capacity : selectedLot?.remaining_quantity;
+    if (remCapacity !== undefined && enteredQty > remCapacity) {
+      alert(`Only ${remCapacity} ${selectedLot?.unit || 'kg'} is still required.`);
       return;
     }
 
@@ -550,7 +565,8 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
         fetchFpoLots();
       }
     } catch (err) {
-      alert(`Failed to add member contribution: ${err.message}`);
+      const msg = err.response?.data?.message || err.message || 'Failed to add member contribution';
+      alert(msg);
     } finally {
       setIsAddingMember(false);
     }
@@ -1590,8 +1606,8 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
                         <Badge variant="danger">EXPIRED</Badge>
                       ) : lot.aggregation_status === 'FILLED' ? (
                         <Badge variant="success">FILLED</Badge>
-                      ) : lot.aggregation_status === 'CLOSING_SOON' ? (
-                        <Badge variant="warning">CLOSING SOON</Badge>
+                      ) : (lot.aggregation_status === 'NEAR_CAPACITY' || lot.aggregation_status === 'CLOSING_SOON') ? (
+                        <Badge variant="warning">NEAR CAPACITY</Badge>
                       ) : (
                         <Badge variant="info">OPEN</Badge>
                       )}
@@ -1613,7 +1629,7 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
                       style={{
                         width: `${Math.min(100, lot.percentage_filled || 0)}%`,
                         height: '100%',
-                        backgroundColor: isLotExpired ? '#ef4444' : lot.aggregation_status === 'FILLED' ? '#10b981' : lot.aggregation_status === 'CLOSING_SOON' ? '#f59e0b' : 'var(--primary-600)',
+                        backgroundColor: isLotExpired ? '#ef4444' : lot.aggregation_status === 'FILLED' ? '#10b981' : (lot.aggregation_status === 'NEAR_CAPACITY' || lot.aggregation_status === 'CLOSING_SOON') ? '#f59e0b' : 'var(--primary-600)',
                         transition: 'width 0.3s ease',
                       }}
                     />
@@ -1654,8 +1670,8 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
                           <Badge variant="danger">EXPIRED</Badge>
                         ) : selectedLot.aggregation_status === 'FILLED' ? (
                           <Badge variant="success">FILLED (100%)</Badge>
-                        ) : selectedLot.aggregation_status === 'CLOSING_SOON' ? (
-                          <Badge variant="warning">CLOSING SOON (90%)</Badge>
+                        ) : (selectedLot.aggregation_status === 'NEAR_CAPACITY' || selectedLot.aggregation_status === 'CLOSING_SOON') ? (
+                          <Badge variant="warning">NEAR CAPACITY (90%)</Badge>
                         ) : (
                           <Badge variant="info">OPEN FOR CONTRIBUTIONS</Badge>
                         )}
@@ -1708,7 +1724,7 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
                               Publish to Marketplace
                             </Button>
                           )}
-                          {selectedLot.aggregation_status !== 'FILLED' && selectedLot.aggregation_status !== 'CLOSED' && selectedLot.aggregation_status !== 'CANCELLED' && (
+                          {selectedLot.aggregation_status !== 'FILLED' && selectedLot.aggregation_status !== 'CLOSED' && selectedLot.aggregation_status !== 'CANCELLED' && selectedLot.aggregation_status !== 'EXPIRED' && !selectedLot.is_expired && (
                             <Button
                               variant="primary"
                               icon={PlusCircle}
@@ -1854,7 +1870,7 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
                         style={{
                           width: `${Math.min(100, selectedLot.percentage_filled || 0)}%`,
                           height: '100%',
-                          backgroundColor: selectedLot.aggregation_status === 'FILLED' ? '#10b981' : selectedLot.aggregation_status === 'CLOSING_SOON' ? '#f59e0b' : 'var(--primary-600)',
+                          backgroundColor: selectedLot.aggregation_status === 'FILLED' ? '#10b981' : (selectedLot.aggregation_status === 'NEAR_CAPACITY' || selectedLot.aggregation_status === 'CLOSING_SOON') ? '#f59e0b' : 'var(--primary-600)',
                           transition: 'width 0.3s ease',
                         }}
                       />
@@ -2669,16 +2685,12 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
                         Simulate Offer Parameters
                       </h4>
 
-                      <div>
-                        <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-700)', marginBottom: '6px' }}>
-                          Target Crop
-                        </label>
-                        <Select
-                          options={CROP_OPTIONS}
-                          value={simCrop}
-                          onChange={(e) => setSimCrop(e.target.value)}
-                        />
-                      </div>
+                      <CommodityAutocomplete
+                        label="Target Crop"
+                        value={simCrop}
+                        onChange={(e) => setSimCrop(e.target.value)}
+                        placeholder="Search produce..."
+                      />
 
                       <div>
                         <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-700)', marginBottom: '6px' }}>
@@ -3078,7 +3090,7 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
       <Modal
         isOpen={addMemberModalOpen}
         onClose={() => setAddMemberModalOpen(false)}
-        title={`Add Member Contribution to ${selectedLot?.crop || 'Batch'}`}
+        title={isFarmer ? `Pledge Produce Contribution to ${selectedLot?.crop || 'Aggregation'}` : `Add Member Contribution to ${selectedLot?.crop || 'Batch'}`}
         footer={
           <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
             <Button variant="outline-primary" onClick={() => setAddMemberModalOpen(false)}>
@@ -3087,14 +3099,53 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
             <Button
               variant="primary"
               onClick={handleAddMember}
-              disabled={isAddingMember || !memberFarmerName || !memberQuantity}
+              disabled={
+                isAddingMember ||
+                !memberFarmerName ||
+                !memberQuantity ||
+                parseFloat(memberQuantity) <= 0 ||
+                (selectedLot?.remaining_capacity !== undefined && parseFloat(memberQuantity) > selectedLot.remaining_capacity)
+              }
             >
-              {isAddingMember ? 'Recording...' : 'Add Contribution'}
+              {isAddingMember ? 'Recording...' : isFarmer ? 'Submit Pledge' : 'Add Contribution'}
             </Button>
           </div>
         }
       >
         <form onSubmit={handleAddMember} style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+          <div
+            style={{
+              backgroundColor: '#eff6ff',
+              border: '1px solid #bfdbfe',
+              borderRadius: '8px',
+              padding: '10px 14px',
+              fontSize: '0.84rem',
+              color: '#1e40af',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}
+          >
+            <span>Target Quota: <strong>{selectedLot?.target_quantity || selectedLot?.quantity} {selectedLot?.unit}</strong></span>
+            <span>Still Required: <strong style={{ color: '#0369a1' }}>{selectedLot?.remaining_capacity ?? selectedLot?.remaining_quantity ?? 0} {selectedLot?.unit}</strong></span>
+          </div>
+
+          {parseFloat(memberQuantity) > (selectedLot?.remaining_capacity ?? selectedLot?.remaining_quantity ?? 0) && (
+            <div
+              style={{
+                backgroundColor: '#fef2f2',
+                border: '1px solid #fecaca',
+                borderRadius: '8px',
+                padding: '10px 14px',
+                fontSize: '0.84rem',
+                color: '#b91c1c',
+                fontWeight: 600,
+              }}
+            >
+              ⚠️ Only {selectedLot?.remaining_capacity ?? selectedLot?.remaining_quantity} {selectedLot?.unit} is still required.
+            </div>
+          )}
+
           <div>
             <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-700)', marginBottom: '6px' }}>
               Farmer Full Name *
@@ -3221,19 +3272,15 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
 
           {/* Crop & Variety */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-700)', marginBottom: '6px' }}>
-                Crop Type *
-              </label>
-              <Select
-                options={CROP_OPTIONS}
-                value={newCrop}
-                onChange={(e) => {
-                  setNewCrop(e.target.value);
-                  fetchSmartSuggestion(e.target.value, newStorageStatus);
-                }}
-              />
-            </div>
+            <CommodityAutocomplete
+              label="Crop Type *"
+              value={newCrop}
+              onChange={(e) => {
+                setNewCrop(e.target.value);
+                fetchSmartSuggestion(e.target.value, newStorageStatus);
+              }}
+              placeholder="Search produce..."
+            />
 
             <div>
               <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-700)', marginBottom: '6px' }}>
@@ -3459,18 +3506,32 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
             )}
 
             {/* Live Calculated Timeline Preview */}
-            <div style={{ marginTop: '12px', paddingTop: '10px', borderTop: '1px dashed var(--border-color)', display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', color: 'var(--slate-600)' }}>
-              <span><strong>Starts:</strong> Right Now</span>
-              <span>
-                <strong>Deadline:</strong>{' '}
-                {new Date(Date.now() + (parseFloat(newDurationHours) || 10) * 3600 * 1000).toLocaleString('en-IN', {
-                  day: 'numeric',
-                  month: 'short',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  hour12: true,
-                })}
-              </span>
+            <div
+              style={{
+                marginTop: '12px',
+                padding: '12px 14px',
+                backgroundColor: '#ffffff',
+                borderRadius: '8px',
+                border: '1px solid #cbd5e1',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '8px',
+              }}
+            >
+              <div>
+                <div style={{ fontSize: '0.78rem', color: '#64748b', fontWeight: 600 }}>Collection Window</div>
+                <div style={{ fontSize: '0.92rem', fontWeight: 700, color: '#0f172a' }}>
+                  Recommended for {newCrop}: {smartSuggestion?.suggested_hours || 12} hours
+                </div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: '0.78rem', color: '#64748b', fontWeight: 600 }}>Closes:</div>
+                <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#0284c7' }}>
+                  {calculateClosingTime(newDurationHours || smartSuggestion?.suggested_hours || 12)}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -4024,16 +4085,12 @@ export const FPOAggregationPage = ({ user, onNavigate }) => {
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, color: 'var(--slate-700)', marginBottom: '6px' }}>
-                Crop *
-              </label>
-              <Select
-                options={CROP_OPTIONS}
-                value={directCrop}
-                onChange={(e) => setDirectCrop(e.target.value)}
-              />
-            </div>
+            <CommodityAutocomplete
+              label="Crop *"
+              value={directCrop}
+              onChange={(e) => setDirectCrop(e.target.value)}
+              placeholder="Search produce..."
+            />
             <Input
               label="Variety *"
               placeholder="e.g. Abhinav Hybrid / Red Nashik"

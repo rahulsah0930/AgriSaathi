@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <radialGradient id="turmGrad" cx="35%" cy="35%" r="65%">
+      <stop offset="0%" stop-color="#fde047"/>
+      <stop offset="60%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </radialGradient>
+  </defs>
+  <rect width="100" height="100" rx="16" fill="#fffbeb"/>
+  <!-- Knobby Rhizome -->
+  <path d="M26 62 Q34 38 52 42 Q68 34 76 52 Q64 74 42 70 Q28 74 26 62 Z" fill="url(#turmGrad)"/>
+  <ellipse cx="64" cy="42" rx="10" ry="8" fill="url(#turmGrad)"/>
+  <!-- Cut slice showing orange core -->
+  <ellipse cx="32" cy="62" rx="9" ry="7" fill="#ea580c"/>
+  <ellipse cx="32" cy="62" rx="6" ry="4.5" fill="#f97316"/>
+</svg>

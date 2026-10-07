@@ -8,7 +8,8 @@ import {
   Sparkles,
   ShoppingCart,
   Package,
-  ShieldCheck
+  ShieldCheck,
+  Truck
 } from 'lucide-react';
 import api from '../../services/api';
 
@@ -42,7 +43,10 @@ export const SellerLogin = ({
       });
 
       if (res.success) {
-        onLoginSuccess(res.user, res.message);
+        const token = res.token || res.access_token;
+        if (token) api.setToken(token);
+        if (res.user) api.setStoredUser(res.user);
+        onLoginSuccess(res.user, res.message, token);
       } else {
         setError(res.message || 'Login failed.');
       }
@@ -69,7 +73,10 @@ export const SellerLogin = ({
       });
 
       if (res.success) {
-        onLoginSuccess(res.user, res.message);
+        const token = res.token || res.access_token;
+        if (token) api.setToken(token);
+        if (res.user) api.setStoredUser(res.user);
+        onLoginSuccess(res.user, res.message, token);
       } else {
         setError(res.message || 'Demo login failed.');
       }
@@ -85,6 +92,7 @@ export const SellerLogin = ({
     FPO: { label: 'FPO / Cooperative', icon: <Building2 size={18} /> },
     BUYER: { label: 'Wholesale Buyer', icon: <ShoppingCart size={18} /> },
     WAREHOUSE: { label: 'Cold Storage', icon: <Package size={18} /> },
+    LOGISTICS: { label: 'Transporter', icon: <Truck size={18} /> },
     ADMIN: { label: 'Government Admin', icon: <ShieldCheck size={18} /> },
   };
 
@@ -93,6 +101,7 @@ export const SellerLogin = ({
   const getHeading = () => {
     if (role === 'BUYER') return 'AgriSaathi Wholesale Buyer Login';
     if (role === 'WAREHOUSE') return 'Cold Storage & Warehouse Login';
+    if (role === 'LOGISTICS') return 'AgriSaathi Transporter Fleet Login';
     if (role === 'ADMIN') return 'Government Regulatory Admin Login';
     return 'AgriSaathi Seller Portal Login';
   };
@@ -100,6 +109,7 @@ export const SellerLogin = ({
   const getSubheading = () => {
     if (role === 'BUYER') return 'Sign in to access verified marketplace, contracts & escrow orders';
     if (role === 'WAREHOUSE') return 'Sign in to manage cold storage capacity and farmer bookings';
+    if (role === 'LOGISTICS') return 'Sign in to access available farmgate dispatch orders & active consignments';
     if (role === 'ADMIN') return 'Sign in to access state oversight, escrow audits & dispute resolution';
     return 'Sign in to access your Farmer or FPO account';
   };
@@ -411,6 +421,39 @@ export const SellerLogin = ({
                   style={{ fontSize: '0.8rem', padding: '6px 12px', marginTop: '4px', backgroundColor: '#7c3aed' }}
                 >
                   1-Click State Admin Login
+                </Button>
+              </div>
+            )}
+
+            {/* If Logistics Mode */}
+            {role === 'LOGISTICS' && (
+              <div
+                style={{
+                  padding: '10px 12px',
+                  backgroundColor: '#ffffff',
+                  border: '1px solid #2563eb',
+                  borderRadius: '6px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '4px',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--slate-900)' }}>
+                    MahaAgri Rural Express Logistics
+                  </span>
+                  <Badge variant="info" size="sm">Commercial Fleet</Badge>
+                </div>
+                <span style={{ fontSize: '0.75rem', color: 'var(--slate-500)' }}>
+                  Nashik-Pune-Mumbai Corridor • 8 Commercial Trucks • Cold-Chain
+                </span>
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={() => handleQuickDemoLogin('9820099887', 'logistics123', 'LOGISTICS')}
+                  style={{ fontSize: '0.8rem', padding: '6px 12px', marginTop: '4px', backgroundColor: '#2563eb' }}
+                >
+                  1-Click Transporter Login
                 </Button>
               </div>
             )}

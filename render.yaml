@@ -1,0 +1,32 @@
+services:
+  - type: web
+    name: agrisaathi-backend
+    runtime: python
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt && flask db upgrade
+    startCommand: gunicorn -b 0.0.0.0:$PORT app:app
+    plan: free
+    autoDeploy: true
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: PYTHON_VERSION
+        value: 3.12.10
+      - key: DATABASE_URL
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: FRONTEND_URL
+        sync: false
+      - key: DEMO_MODE
+        value: "false"
+      - key: STORAGE_PROVIDER
+        value: cloudinary
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <radialGradient id="cotGrad" cx="40%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="80%" stop-color="#f1f5f9"/>
+      <stop offset="100%" stop-color="#cbd5e1"/>
+    </radialGradient>
+  </defs>
+  <rect width="100" height="100" rx="16" fill="#f8fafc"/>
+  <!-- Calyx -->
+  <path d="M50 78 L34 68 L42 60 L50 68 L58 60 L66 68 Z" fill="#78350f"/>
+  <!-- Fluffy Boll -->
+  <circle cx="38" cy="46" r="16" fill="url(#cotGrad)"/>
+  <circle cx="62" cy="46" r="16" fill="url(#cotGrad)"/>
+  <circle cx="50" cy="34" r="16" fill="url(#cotGrad)"/>
+  <circle cx="50" cy="54" r="17" fill="url(#cotGrad)"/>
+</svg>

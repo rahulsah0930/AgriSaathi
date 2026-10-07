@@ -1,24 +1,30 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from datetime import datetime
 from models import db
 from models.grievance import Grievance
 from models.transaction import Transaction
 from models.notification import Notification
 from models.user import User
+from utils.auth import jwt_required, role_required
 
 grievance_bp = Blueprint('grievances', __name__, url_prefix='/api/grievances')
 
 @grievance_bp.route('', methods=['GET'])
+@jwt_required
 def list_grievances():
-    """List grievances filed by or against the user."""
-    user_id = request.args.get('user_id', type=int)
+    """List grievances filed by or against the authenticated user, or all for admin."""
+    user = g.current_user
     txn_id = request.args.get('transaction_id', type=int)
 
     query = Grievance.query
+    if user.role != 'ADMIN':
+        query = query.filter((Grievance.complainant_id == user.id) | (Grievance.respondent_id == user.id))
+    elif user.role == 'ADMIN' and request.args.get('user_id'):
+        uid = request.args.get('user_id', type=int)
+        query = query.filter((Grievance.complainant_id == uid) | (Grievance.respondent_id == uid))
+
     if txn_id:
         query = query.filter_by(transaction_id=txn_id)
-    elif user_id:
-        query = query.filter((Grievance.complainant_id == user_id) | (Grievance.respondent_id == user_id))
 
     grievances = query.order_by(Grievance.created_at.desc()).all()
     return jsonify({
@@ -29,20 +35,11 @@ def list_grievances():
 
 
 @grievance_bp.route('', methods=['POST'])
+@jwt_required
 def create_grievance():
     """File a formal dispute/grievance for Government Nodal Officer adjudication."""
     data = request.get_json() or {}
-
-    complainant_id = data.get('complainant_id')
-    if not complainant_id:
-        auth_header = request.headers.get('Authorization', '')
-        if 'session_token_' in auth_header:
-            try:
-                complainant_id = int(auth_header.split('session_token_')[1].split('_')[0])
-            except Exception:
-                pass
-        if not complainant_id:
-            complainant_id = 1
+    complainant_id = g.current_user.id
 
     title = data.get('title')
     description = data.get('description')
@@ -54,15 +51,21 @@ def create_grievance():
         return jsonify({
             'success': False,
             'error': 'Validation Error',
-            'message': 'complainant_id, title, and description are mandatory.'
+            'message': 'title and description are mandatory.'
         }), 400
 
-    # Auto-infer respondent from transaction if provided
-    if transaction_id and not respondent_id:
+    # Auto-infer respondent from transaction if provided and verify participant
+    if transaction_id:
         txn = Transaction.query.get(transaction_id)
         if txn:
-            respondent_id = txn.seller_id if complainant_id == txn.buyer_id else txn.buyer_id
-            # Also update transaction status to DISPUTED
+            if g.current_user.id not in (txn.buyer_id, txn.seller_id) and g.current_user.role != 'ADMIN':
+                return jsonify({
+                    'success': False,
+                    'error': 'Forbidden',
+                    'message': 'You are not a participant in this transaction.'
+                }), 403
+            if not respondent_id:
+                respondent_id = txn.seller_id if complainant_id == txn.buyer_id else txn.buyer_id
             txn.status = 'DISPUTED'
 
     ref = f'GRV-2026-{int(datetime.utcnow().timestamp()) % 100000:05d}'

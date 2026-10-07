@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <radialGradient id="soyGrad" cx="35%" cy="35%" r="65%">
+      <stop offset="0%" stop-color="#fef08a"/>
+      <stop offset="70%" stop-color="#eab308"/>
+      <stop offset="100%" stop-color="#854d0e"/>
+    </radialGradient>
+  </defs>
+  <rect width="100" height="100" rx="16" fill="#fefce8"/>
+  <!-- Pod -->
+  <path d="M22 62 C34 40 60 36 78 50 C66 68 40 72 22 62 Z" fill="#65a30d" opacity="0.85"/>
+  <!-- Soybean seeds -->
+  <ellipse cx="38" cy="54" rx="9" ry="11" fill="url(#soyGrad)" transform="rotate(15 38 54)"/>
+  <ellipse cx="58" cy="50" rx="9" ry="11" fill="url(#soyGrad)" transform="rotate(-10 58 50)"/>
+  <!-- Hilum spot -->
+  <ellipse cx="38" cy="54" rx="2" ry="1" fill="#713f12"/>
+  <ellipse cx="58" cy="50" rx="2" ry="1" fill="#713f12"/>
+</svg>

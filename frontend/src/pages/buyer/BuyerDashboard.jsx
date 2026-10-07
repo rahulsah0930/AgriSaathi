@@ -30,7 +30,8 @@ import {
   QrCode,
   Download,
   Building,
-  Briefcase
+  Briefcase,
+  Truck
 } from 'lucide-react';
 import { api, getImageUrl } from '../../services/api';
 
@@ -85,8 +86,31 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
   const [myOffers, setMyOffers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [resolvedSearchCrop, setResolvedSearchCrop] = useState(null);
   const [selectedCrop, setSelectedCrop] = useState('ALL');
   const [selectedDistrict, setSelectedDistrict] = useState('ALL');
+
+  // Debounced smart multilingual search resolution
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q || q.length < 2) {
+      setResolvedSearchCrop(null);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const res = await api.get(`/api/commodities/resolve?q=${encodeURIComponent(q)}`);
+        if (res?.success && res.commodity) {
+          setResolvedSearchCrop(res.commodity.canonical_name);
+        } else {
+          setResolvedSearchCrop(null);
+        }
+      } catch (e) {
+        setResolvedSearchCrop(null);
+      }
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   // Modal states
   const [selectedLot, setSelectedLot] = useState(null);
@@ -114,6 +138,9 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
 
   // Government Verification Certificate Modal
   const [govCertModalOpen, setGovCertModalOpen] = useState(false);
+
+  // Logistics Proof of Delivery Modal
+  const [previewPodData, setPreviewPodData] = useState(null);
 
   // Banner message
   const [banner, setBanner] = useState(null);
@@ -235,14 +262,12 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
   };
 
   const handleConfirmDelivery = async (txnId) => {
-    if (!window.confirm('Confirm that produce has been physically received and inspected at your delivery hub? This will release the final payment.')) return;
+    if (!window.confirm('Confirm that produce has been physically received and inspected at your delivery hub? You will then be prompted to deposit the final balance into prototype escrow.')) return;
 
     try {
-      const res = await api.post(`/api/transactions/${txnId}/status`, {
-        status: 'BUYER_CONFIRMED',
-      });
+      const res = await api.post(`/api/transactions/${txnId}/confirm-delivery`);
       if (res.success) {
-        setBanner({ type: 'success', message: 'Delivery confirmed! Escrow funds released to the seller.' });
+        setBanner({ type: 'success', message: 'Delivery confirmed! Please pay the remaining balance to complete settlement.' });
         loadData();
       }
     } catch (err) {
@@ -250,13 +275,36 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
     }
   };
 
-  // Filter lots
+  const handlePayBalance = async (txn) => {
+    setPayingEscrow(true);
+    try {
+      const res = await api.post('/api/payments/pay-balance', {
+        transaction_id: txn.id,
+        payment_method: 'SIMULATED_ESCROW',
+      });
+      if (res.success) {
+        setBanner({ type: 'success', message: res.message || 'Balance paid and transaction settled!' });
+        loadData();
+      }
+    } catch (err) {
+      alert(err.message || 'Balance payment failed');
+    } finally {
+      setPayingEscrow(false);
+    }
+  };
+
+  // Filter lots with smart multilingual matching
   const filteredLots = lots.filter((lot) => {
+    const q = searchQuery.toLowerCase().trim();
+    const resolvedCropLower = resolvedSearchCrop ? resolvedSearchCrop.toLowerCase() : null;
+
     const matchesSearch =
-      lot.crop.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      lot.variety.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      lot.seller_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      lot.district.toLowerCase().includes(searchQuery.toLowerCase());
+      !q ||
+      lot.crop.toLowerCase().includes(q) ||
+      (resolvedCropLower && lot.crop.toLowerCase().includes(resolvedCropLower)) ||
+      (lot.variety && lot.variety.toLowerCase().includes(q)) ||
+      (lot.seller_name && lot.seller_name.toLowerCase().includes(q)) ||
+      (lot.district && lot.district.toLowerCase().includes(q));
 
     const matchesCrop = selectedCrop === 'ALL' || lot.crop.toUpperCase() === selectedCrop.toUpperCase();
     const matchesDistrict = selectedDistrict === 'ALL' || lot.district.toUpperCase() === selectedDistrict.toUpperCase();
@@ -1019,6 +1067,28 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
             />
           </div>
 
+          {/* Smart Multilingual Produce Resolution Indicator */}
+          {resolvedSearchCrop && resolvedSearchCrop.toLowerCase() !== searchQuery.toLowerCase().trim() && (
+            <div
+              style={{
+                marginBottom: '16px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                backgroundColor: 'var(--primary-50, #ecfdf5)',
+                border: '1px solid var(--primary-200, #a7f3d0)',
+                color: 'var(--primary-800, #065f46)',
+                borderRadius: 'var(--radius-md, 6px)',
+                padding: '6px 12px',
+                fontSize: '0.85rem',
+                fontWeight: 500,
+              }}
+            >
+              <span>🌱 Smart Multilingual Match: <strong>"{searchQuery}"</strong> resolved to canonical <strong>{resolvedSearchCrop}</strong></span>
+              <span style={{ fontSize: '0.78rem', color: 'var(--primary-600)' }}>({filteredLots.length} lot{filteredLots.length === 1 ? '' : 's'} matching)</span>
+            </div>
+          )}
+
           {/* Produce Cards Grid */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '16px' }}>
             {filteredLots.map((lot) => {
@@ -1256,8 +1326,9 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
             <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
               {orders.map((order) => {
                 const advancePct = order.advance_percentage || 20;
-                const isAdvancePaid = order.status !== 'ADVANCE_PENDING';
-                const canConfirmDelivery = order.status === 'IN_TRANSIT' || order.status === 'DELIVERED';
+                const isAdvancePaid = !['AWAITING_ADVANCE', 'ADVANCE_PENDING', 'OFFER_ACCEPTED'].includes(order.status);
+                const canConfirmDelivery = order.status === 'DELIVERED';
+                const canPayBalance = order.status === 'BUYER_CONFIRMED';
 
                 return (
                   <Card key={order.id} style={{ padding: '16px' }}>
@@ -1298,10 +1369,10 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
                     >
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.82rem', marginBottom: '6px' }}>
                         <span style={{ fontWeight: 600, color: 'var(--slate-800)' }}>
-                          Two-Stage Escrow Protection ({advancePct}% Advance / {100 - advancePct}% Balance)
+                          Two-Stage Prototype Escrow Protection ({advancePct}% Advance / {100 - advancePct}% Balance)
                         </span>
                         <span style={{ color: isAdvancePaid ? 'var(--success-700)' : 'var(--warning-700)', fontWeight: 600 }}>
-                          {isAdvancePaid ? '✓ Advance Secured in Escrow' : '⚠ Advance Payment Pending'}
+                          {isAdvancePaid ? '✓ Advance Secured in Prototype Escrow' : '⚠ Advance Payment Pending'}
                         </span>
                       </div>
 
@@ -1310,7 +1381,7 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
                           <span style={{ color: 'var(--slate-500)' }}>Stage 1 (Advance {advancePct}%): </span>
                           <strong>₹{order.advance_amount?.toLocaleString()}</strong>
                           <div style={{ fontSize: '0.72rem', color: isAdvancePaid ? 'var(--success-600)' : 'var(--error-600)' }}>
-                            {isAdvancePaid ? 'Secured in Govt Escrow' : 'Action Required'}
+                            {isAdvancePaid ? 'Secured in Prototype Escrow' : 'Action Required'}
                           </div>
                         </div>
 
@@ -1325,7 +1396,7 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
                     </div>
 
                     {/* Order Locations & Logistics */}
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '0.8rem', marginBottom: '12px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '0.8rem', marginBottom: '10px' }}>
                       <div>
                         <span style={{ color: 'var(--slate-500)' }}>Pickup Farm Gate: </span>
                         <div>{order.pickup_address} ({order.pickup_district})</div>
@@ -1336,6 +1407,103 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
                       </div>
                     </div>
 
+                    {/* Linked Prototype Logistics Status */}
+                    {order.transport_order ? (
+                      <div
+                        style={{
+                          marginBottom: '12px',
+                          padding: '10px 12px',
+                          backgroundColor: '#f0fdf4',
+                          border: '1px solid #bbf7d0',
+                          borderRadius: 'var(--radius-md)',
+                          fontSize: '0.82rem',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px', flexWrap: 'wrap', gap: '6px' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: '#166534' }}>
+                            <Truck size={16} />
+                            <span>Transport Consignment: {order.transport_order.order_ref}</span>
+                            <Badge variant={order.transport_order.status === 'DELIVERED' ? 'success' : 'info'}>
+                              {order.transport_order.status.replace(/_/g, ' ')}
+                            </Badge>
+                          </div>
+                          {order.transport_order.estimated_distance_km && (
+                            <span style={{ color: '#15803d', fontSize: '0.78rem' }}>
+                              Approx. {order.transport_order.estimated_distance_km} km
+                            </span>
+                          )}
+                        </div>
+
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '8px', color: '#1e293b' }}>
+                          <div>
+                            <span style={{ color: '#64748b', fontSize: '0.75rem' }}>Transporter: </span>
+                            <div><strong>{order.transport_order.provider_name || 'Assigned Logistics Provider'}</strong></div>
+                          </div>
+                          <div>
+                            <span style={{ color: '#64748b', fontSize: '0.75rem' }}>Vehicle: </span>
+                            <div>
+                              {order.transport_order.vehicle_number ? (
+                                <span>{order.transport_order.vehicle_type || 'Vehicle'}: <strong>{order.transport_order.vehicle_number}</strong></span>
+                              ) : (
+                                <span style={{ color: '#94a3b8' }}>Awaiting vehicle assignment</span>
+                              )}
+                            </div>
+                          </div>
+                          {order.transport_order.driver_name && (
+                            <div>
+                              <span style={{ color: '#64748b', fontSize: '0.75rem' }}>Driver: </span>
+                              <div>
+                                {order.transport_order.driver_name}{' '}
+                                {order.transport_order.driver_phone && <span style={{ color: '#64748b' }}>({order.transport_order.driver_phone})</span>}
+                              </div>
+                            </div>
+                          )}
+                          {order.transport_order.pod_image_url && (
+                            <div style={{ display: 'flex', alignItems: 'flex-end' }}>
+                              <button
+                                type="button"
+                                onClick={() => setPreviewPodData(order.transport_order)}
+                                style={{
+                                  padding: '4px 8px',
+                                  backgroundColor: '#166534',
+                                  color: '#ffffff',
+                                  border: 'none',
+                                  borderRadius: '4px',
+                                  fontSize: '0.75rem',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                }}
+                              >
+                                <CheckCircle size={12} /> View Proof of Delivery (POD)
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      order.status === 'READY_FOR_LOGISTICS' && (
+                        <div
+                          style={{
+                            marginBottom: '12px',
+                            padding: '8px 12px',
+                            backgroundColor: '#f8fafc',
+                            border: '1px dashed #cbd5e1',
+                            borderRadius: 'var(--radius-md)',
+                            fontSize: '0.78rem',
+                            color: '#64748b',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                          }}
+                        >
+                          <Truck size={14} />
+                          <span>Advance escrow secured. Seller is scheduling logistics transport dispatch.</span>
+                        </div>
+                      )
+                    )}
+
                     {/* Action Bar */}
                     <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', alignItems: 'center' }}>
                       {!isAdvancePaid && (
@@ -1344,7 +1512,7 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
                           onClick={() => setEscrowModalTxn(order)}
                           style={{ fontSize: '0.85rem' }}
                         >
-                          Deposit ₹{order.advance_amount?.toLocaleString()} into Govt Escrow
+                          Deposit ₹{order.advance_amount?.toLocaleString()} into Prototype Escrow
                         </Button>
                       )}
 
@@ -1354,7 +1522,17 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
                           onClick={() => handleConfirmDelivery(order.id)}
                           style={{ fontSize: '0.85rem' }}
                         >
-                          ✓ Confirm Delivery & Release Escrow
+                          ✓ Confirm Physical Delivery
+                        </Button>
+                      )}
+
+                      {canPayBalance && (
+                        <Button
+                          variant="primary"
+                          onClick={() => handlePayBalance(order)}
+                          style={{ fontSize: '0.85rem' }}
+                        >
+                          Pay Remaining Balance (Prototype) ₹{order.balance_amount?.toLocaleString()}
                         </Button>
                       )}
 
@@ -2122,7 +2300,7 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
         <Modal
           isOpen={!!escrowModalTxn}
           onClose={() => setEscrowModalTxn(null)}
-          title="Government Escrow Advance Deposit"
+          title="Prototype Escrow Advance Deposit"
         >
           <div>
             <div
@@ -2160,7 +2338,7 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
                 color: '#1e40af',
               }}
             >
-              <strong>Government Escrow Security:</strong> Funds are locked under the Maharashtra State Agriculture Marketing Board Escrow protocol. The seller cannot withdraw these funds until you inspect and confirm delivery at your depot.
+              <strong>Prototype Escrow Security:</strong> Funds are held securely in simulated prototype escrow. The seller cannot withdraw these funds until you inspect and confirm delivery at your depot.
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
@@ -2170,7 +2348,7 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
                 onClick={() => handleDepositEscrow(escrowModalTxn)}
                 isLoading={payingEscrow}
               >
-                Deposit ₹{escrowModalTxn.advance_amount?.toLocaleString()} into Escrow
+                Deposit ₹{escrowModalTxn.advance_amount?.toLocaleString()} into Prototype Escrow
               </Button>
             </div>
           </div>
@@ -2315,6 +2493,63 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
                 onClick={() => setGovCertModalOpen(false)}
               >
                 Done
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Proof of Delivery (POD) Preview Modal */}
+      {previewPodData && (
+        <Modal
+          isOpen={!!previewPodData}
+          onClose={() => setPreviewPodData(null)}
+          title={`Proof of Delivery — ${previewPodData.order_ref}`}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            {previewPodData.pod_image_url ? (
+              <div style={{ textAlign: 'center' }}>
+                <img
+                  src={getImageUrl(previewPodData.pod_image_url)}
+                  alt="Proof of Delivery"
+                  style={{
+                    maxWidth: '100%',
+                    maxHeight: '360px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-color)',
+                    objectFit: 'contain',
+                    backgroundColor: '#0f172a'
+                  }}
+                  onError={(e) => {
+                    e.target.style.display = 'none';
+                    e.target.nextSibling.style.display = 'block';
+                  }}
+                />
+                <div style={{ display: 'none', padding: '20px', color: 'var(--slate-500)', fontStyle: 'italic' }}>
+                  Image unavailable or loading error.
+                </div>
+              </div>
+            ) : (
+              <p style={{ color: 'var(--slate-600)', fontStyle: 'italic' }}>No POD image attached.</p>
+            )}
+
+            <div style={{ backgroundColor: 'var(--slate-50)', padding: '12px', borderRadius: '6px', fontSize: '0.85rem' }}>
+              <div><strong>Transporter: </strong>{previewPodData.provider_name || 'Logistics Provider'}</div>
+              <div><strong>Vehicle: </strong>{previewPodData.vehicle_number || 'N/A'} ({previewPodData.vehicle_type || 'Vehicle'})</div>
+              {previewPodData.driver_name && <div><strong>Driver: </strong>{previewPodData.driver_name}</div>}
+              {previewPodData.pod_notes && (
+                <div style={{ marginTop: '6px' }}><strong>Driver/Agent Note: </strong>{previewPodData.pod_notes}</div>
+              )}
+              {previewPodData.delivered_at && (
+                <div style={{ marginTop: '4px', color: 'var(--slate-600)', fontSize: '0.8rem' }}>
+                  Delivered At: {new Date(previewPodData.delivered_at).toLocaleString()}
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <Button variant="secondary" onClick={() => setPreviewPodData(null)}>
+                Close
               </Button>
             </div>
           </div>

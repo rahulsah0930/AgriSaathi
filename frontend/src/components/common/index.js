@@ -19,4 +19,5 @@ export { FilterPanel } from './FilterPanel';
 export { CropImageUploader } from './CropImageUploader';
 export { QualityCard } from './QualityCard';
 export { LocationPicker } from './LocationPicker';
+export { CommodityAutocomplete } from './CommodityAutocomplete';
 

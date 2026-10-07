@@ -81,7 +81,10 @@ export const FarmerRegister = ({ onBackToLanding, onRegisterSuccess, onSwitchToL
     try {
       const res = await api.post('/api/auth/register/farmer', formData);
       if (res.success) {
-        onRegisterSuccess(res.user, res.message);
+        const token = res.token || res.access_token;
+        if (token) api.setToken(token);
+        if (res.user) api.setStoredUser(res.user);
+        onRegisterSuccess(res.user, res.message, token);
       } else {
         setError(res.message || 'Registration failed.');
       }

@@ -15,6 +15,8 @@ import {
   Droplets,
   AlertCircle,
   Loader2,
+  Camera,
+  Info,
 } from 'lucide-react';
 import { Button, Badge, Modal } from './';
 import { api } from '../../services/api';
@@ -47,6 +49,15 @@ const STATUS_CONFIGS = {
     border: '#fde68a',
     description: 'Physical produce samples are currently undergoing quality assessment.',
   },
+  NEEDS_INSPECTION: {
+    label: 'Needs Inspection',
+    badgeVariant: 'warning',
+    icon: AlertTriangle,
+    color: '#d97706',
+    bg: '#fffbeb',
+    border: '#fde68a',
+    description: 'Reviewer flagged lot as requiring physical packhouse inspection prior to transaction settlement.',
+  },
   VERIFIED: {
     label: 'Officially Verified',
     badgeVariant: 'success',
@@ -54,7 +65,7 @@ const STATUS_CONFIGS = {
     color: '#059669',
     bg: '#ecfdf5',
     border: '#a7f3d0',
-    description: 'Physically inspected and verified by an authorized agricultural quality representative.',
+    description: 'Physically inspected and verified by an authorized agricultural quality representative or buyer.',
   },
   REQUIRES_RECHECK: {
     label: 'Requires Recheck',
@@ -84,9 +95,16 @@ export const QualityCard = ({
 }) => {
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
   const [isVerifyModalOpen, setIsVerifyModalOpen] = useState(false);
+  const [isBuyerReviewModalOpen, setIsBuyerReviewModalOpen] = useState(false);
+
   const [requestNotes, setRequestNotes] = useState('');
   const [preferredDate, setPreferredDate] = useState('');
   const [isSubmittingRequest, setIsSubmittingRequest] = useState(false);
+
+  // Buyer/FPO review state
+  const [buyerReviewStatus, setBuyerReviewStatus] = useState('ACCEPTABLE');
+  const [buyerReviewNotes, setBuyerReviewNotes] = useState('');
+  const [isSubmittingBuyerReview, setIsSubmittingBuyerReview] = useState(false);
 
   // Inspector Verify form state (for prototype demonstration)
   const [verifyForm, setVerifyForm] = useState({
@@ -109,6 +127,7 @@ export const QualityCard = ({
     moisture_percentage: 12.0,
     damage_percentage: 2.0,
     freshness_status: 'FRESH',
+    image_validation_status: 'PASSED',
   };
 
   const statusKey = report.verification_status || 'SELF_REPORTED';
@@ -150,6 +169,25 @@ export const QualityCard = ({
     }
   };
 
+  const handleBuyerReviewSubmit = async (e) => {
+    e.preventDefault();
+    setIsSubmittingBuyerReview(true);
+    try {
+      const res = await api.post(`/api/lots/${lot.id}/quality-review`, {
+        review_status: buyerReviewStatus,
+        notes: buyerReviewNotes,
+      });
+      if (res.quality_report && onReportUpdated) {
+        onReportUpdated(res.quality_report, res.lot);
+      }
+      setIsBuyerReviewModalOpen(false);
+    } catch (err) {
+      alert(err.message || 'Failed to record quality review.');
+    } finally {
+      setIsSubmittingBuyerReview(false);
+    }
+  };
+
   return (
     <div
       style={{
@@ -159,7 +197,7 @@ export const QualityCard = ({
         padding: '24px',
         display: 'flex',
         flexDirection: 'column',
-        gap: '18px',
+        gap: '20px',
       }}
     >
       {/* Title & Status Badge */}
@@ -176,11 +214,11 @@ export const QualityCard = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
             <Award size={20} color="var(--primary-700)" />
             <h3 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 800, color: 'var(--slate-900)' }}>
-              Quality Information & Verification
+              Crop Quality Review & Verification
             </h3>
           </div>
           <div style={{ fontSize: '0.82rem', color: 'var(--slate-500)' }}>
-            Transparent quality criteria — visual evidence supported by physical grading parameters.
+            Transparent quality assessment: rule-based image validation, seller declarations, and authorized physical review.
           </div>
         </div>
 
@@ -203,7 +241,108 @@ export const QualityCard = ({
         </div>
       </div>
 
-      {/* Grade Comparison Box */}
+      {/* 4 Pillars of Transparent Quality */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          gap: '12px',
+        }}
+      >
+        {/* 1. Image Validated */}
+        <div
+          style={{
+            padding: '14px',
+            borderRadius: 'var(--radius-md)',
+            backgroundColor: '#f8fafc',
+            border: '1px solid var(--border-color)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+            <Camera size={16} color="var(--primary-700)" />
+            <strong style={{ fontSize: '0.82rem', color: 'var(--slate-800)', textTransform: 'uppercase' }}>
+              Image Validated
+            </strong>
+          </div>
+          <div style={{ fontSize: '0.92rem', fontWeight: 700, color: '#059669', marginBottom: '2px' }}>
+            {report.image_validation_status === 'PASSED' ? '✓ Format & Resolution Passed' : '⚠️ Flagged / Unverified'}
+          </div>
+          <div style={{ fontSize: '0.74rem', color: 'var(--slate-500)' }}>
+            Deterministic MIME, resolution (min 200x200), and corruption checks.
+          </div>
+        </div>
+
+        {/* 2. Seller-Provided Information */}
+        <div
+          style={{
+            padding: '14px',
+            borderRadius: 'var(--radius-md)',
+            backgroundColor: '#f8fafc',
+            border: '1px solid var(--border-color)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+            <HelpCircle size={16} color="#d97706" />
+            <strong style={{ fontSize: '0.82rem', color: 'var(--slate-800)', textTransform: 'uppercase' }}>
+              Seller Provided
+            </strong>
+          </div>
+          <div style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--slate-900)', marginBottom: '2px' }}>
+            Declared: {report.seller_declared_grade || lot?.quality_grade || 'Grade A'}
+          </div>
+          <div style={{ fontSize: '0.74rem', color: 'var(--slate-500)' }}>
+            Moisture: {report.moisture_percentage ?? '12'}% • Damage: {report.damage_percentage ?? '2'}% (Self-Declared)
+          </div>
+        </div>
+
+        {/* 3. Prototype Assistance */}
+        <div
+          style={{
+            padding: '14px',
+            borderRadius: 'var(--radius-md)',
+            backgroundColor: '#f8fafc',
+            border: '1px solid var(--border-color)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+            <Info size={16} color="#2563eb" />
+            <strong style={{ fontSize: '0.82rem', color: 'var(--slate-800)', textTransform: 'uppercase' }}>
+              Prototype Assistance
+            </strong>
+          </div>
+          <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--slate-700)', marginBottom: '2px' }}>
+            Rule-Based Screening
+          </div>
+          <div style={{ fontSize: '0.74rem', color: 'var(--slate-500)' }}>
+            No trained crop computer vision model is currently used in this prototype.
+          </div>
+        </div>
+
+        {/* 4. Buyer/FPO Review */}
+        <div
+          style={{
+            padding: '14px',
+            borderRadius: 'var(--radius-md)',
+            backgroundColor: report.buyer_review_status ? '#ecfdf5' : '#f8fafc',
+            border: `1px solid ${report.buyer_review_status ? '#a7f3d0' : 'var(--border-color)'}`,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+            <UserCheck size={16} color={report.buyer_review_status ? '#059669' : 'var(--slate-500)'} />
+            <strong style={{ fontSize: '0.82rem', color: 'var(--slate-800)', textTransform: 'uppercase' }}>
+              Buyer / FPO Review
+            </strong>
+          </div>
+          <div style={{ fontSize: '0.92rem', fontWeight: 700, color: report.buyer_review_status === 'ACCEPTABLE' ? '#059669' : (report.buyer_review_status === 'REJECTED' ? '#dc2626' : '#d97706'), marginBottom: '2px' }}>
+            {report.buyer_review_status ? report.buyer_review_status : 'Pending Review'}
+          </div>
+          <div style={{ fontSize: '0.74rem', color: 'var(--slate-500)' }}>
+            {report.buyer_reviewed_by ? `By ${report.buyer_reviewed_by}` : 'Authorized buyer/FPO inspection'}
+          </div>
+        </div>
+      </div>
+
+      {/* Grade Comparison Details */}
       <div
         style={{
           display: 'grid',
@@ -215,23 +354,21 @@ export const QualityCard = ({
           padding: '16px',
         }}
       >
-        {/* Seller Declared */}
         <div style={{ borderRight: '1px solid var(--border-color)', paddingRight: '12px' }}>
           <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--slate-500)', marginBottom: '4px' }}>
-            Seller-Declared Quality
+            Seller Declared (Self-Assessed)
           </div>
           <div style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--slate-900)' }}>
             {report.seller_declared_grade || lot?.quality_grade || 'Grade A'}
           </div>
           <div style={{ fontSize: '0.75rem', color: 'var(--slate-500)', marginTop: '2px' }}>
-            Self-assessed at harvest
+            Seller-provided attribute
           </div>
         </div>
 
-        {/* Verified Grade */}
         <div style={{ paddingLeft: '8px' }}>
           <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--slate-500)', marginBottom: '4px' }}>
-            Official Verified Grade
+            Officially Verified Grade
           </div>
           <div
             style={{
@@ -263,7 +400,7 @@ export const QualityCard = ({
       {/* Physical Quality Parameters Matrix */}
       <div>
         <div style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--slate-700)', marginBottom: '10px' }}>
-          Physical Quality Metrics
+          Physical Quality Metrics (Seller Reported)
         </div>
         <div
           style={{
@@ -272,122 +409,84 @@ export const QualityCard = ({
             gap: '10px',
           }}
         >
-          <div
-            style={{
-              backgroundColor: '#ffffff',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '12px',
-              textAlign: 'center',
-            }}
-          >
-            <div style={{ fontSize: '0.72rem', color: 'var(--slate-500)', marginBottom: '4px' }}>
-              Condition
-            </div>
+          <div style={{ backgroundColor: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', padding: '12px', textAlign: 'center' }}>
+            <div style={{ fontSize: '0.72rem', color: 'var(--slate-500)', marginBottom: '4px' }}>Condition</div>
             <div style={{ fontSize: '0.88rem', fontWeight: 700, color: 'var(--slate-800)' }}>
               {report.condition_summary || 'Freshly Harvested'}
             </div>
           </div>
 
-          <div
-            style={{
-              backgroundColor: '#ffffff',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '12px',
-              textAlign: 'center',
-            }}
-          >
-            <div style={{ fontSize: '0.72rem', color: 'var(--slate-500)', marginBottom: '4px' }}>
-              Moisture Content
-            </div>
+          <div style={{ backgroundColor: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', padding: '12px', textAlign: 'center' }}>
+            <div style={{ fontSize: '0.72rem', color: 'var(--slate-500)', marginBottom: '4px' }}>Moisture Content</div>
             <div style={{ fontSize: '0.92rem', fontWeight: 700, color: 'var(--primary-700)' }}>
               {report.moisture_percentage !== null ? `${report.moisture_percentage}%` : 'N/A'}
             </div>
           </div>
 
-          <div
-            style={{
-              backgroundColor: '#ffffff',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '12px',
-              textAlign: 'center',
-            }}
-          >
-            <div style={{ fontSize: '0.72rem', color: 'var(--slate-500)', marginBottom: '4px' }}>
-              Defect / Damage
-            </div>
-            <div
-              style={{
-                fontSize: '0.92rem',
-                fontWeight: 700,
-                color: (report.damage_percentage || 0) <= 3 ? '#059669' : '#d97706',
-              }}
-            >
+          <div style={{ backgroundColor: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', padding: '12px', textAlign: 'center' }}>
+            <div style={{ fontSize: '0.72rem', color: 'var(--slate-500)', marginBottom: '4px' }}>Defect / Damage</div>
+            <div style={{ fontSize: '0.92rem', fontWeight: 700, color: (report.damage_percentage || 0) <= 3 ? '#059669' : '#d97706' }}>
               {report.damage_percentage !== null ? `${report.damage_percentage}%` : 'N/A'}
             </div>
           </div>
 
-          <div
-            style={{
-              backgroundColor: '#ffffff',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-sm)',
-              padding: '12px',
-              textAlign: 'center',
-            }}
-          >
-            <div style={{ fontSize: '0.72rem', color: 'var(--slate-500)', marginBottom: '4px' }}>
-              Freshness
-            </div>
-            <div
-              style={{
-                fontSize: '0.88rem',
-                fontWeight: 700,
-                color: report.freshness_status === 'FRESH' ? '#059669' : '#d97706',
-              }}
-            >
+          <div style={{ backgroundColor: '#ffffff', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', padding: '12px', textAlign: 'center' }}>
+            <div style={{ fontSize: '0.72rem', color: 'var(--slate-500)', marginBottom: '4px' }}>Freshness</div>
+            <div style={{ fontSize: '0.88rem', fontWeight: 700, color: report.freshness_status === 'FRESH' ? '#059669' : '#d97706' }}>
               {report.freshness_status || 'FRESH'}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Verification Status Banner / Notes */}
+      {/* Honest Prototype Notice Callout */}
       <div
         style={{
-          backgroundColor: statusCfg.bg,
-          border: `1px solid ${statusCfg.border}`,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          padding: '10px 14px',
+          backgroundColor: '#f8fafc',
+          border: '1px solid var(--border-color)',
           borderRadius: 'var(--radius-md)',
-          padding: '12px 16px',
-          fontSize: '0.84rem',
-          color: 'var(--slate-700)',
-          lineHeight: 1.5,
+          fontSize: '0.82rem',
+          color: 'var(--slate-600)',
         }}
       >
-        <div style={{ fontWeight: 700, color: statusCfg.color, marginBottom: '2px' }}>
-          {statusCfg.label}
-        </div>
-        <div>{statusCfg.description}</div>
-        {report.verifier_notes && (
-          <div
-            style={{
-              marginTop: '8px',
-              paddingTop: '8px',
-              borderTop: `1px dashed ${statusCfg.border}`,
-              fontSize: '0.8rem',
-              color: 'var(--slate-600)',
-            }}
-          >
-            <strong>Inspector Note:</strong> {report.verifier_notes}
-          </div>
-        )}
+        <Info size={16} color="var(--slate-500)" style={{ flexShrink: 0 }} />
+        <span>
+          <strong>Prototype Note:</strong> Automated image validation checks file format and integrity. No trained crop computer vision model is currently used in this prototype. Final quality should be physically verified by Buyer/FPO.
+        </span>
       </div>
+
+      {/* Reviewer / Inspector Notes */}
+      {(report.verifier_notes || report.buyer_review_notes) && (
+        <div
+          style={{
+            backgroundColor: '#f8fafc',
+            border: '1px solid var(--border-color)',
+            borderRadius: 'var(--radius-md)',
+            padding: '12px 16px',
+            fontSize: '0.82rem',
+            color: 'var(--slate-700)',
+          }}
+        >
+          {report.buyer_review_notes && (
+            <div>
+              <strong>Buyer/FPO Review Note:</strong> {report.buyer_review_notes}
+            </div>
+          )}
+          {report.verifier_notes && !report.buyer_review_notes && (
+            <div>
+              <strong>Inspector Note:</strong> {report.verifier_notes}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Action Buttons */}
       <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'flex-end', marginTop: '4px' }}>
-        {statusKey === 'SELF_REPORTED' && (
+        {statusKey === 'SELF_REPORTED' && isSeller && (
           <Button
             variant="primary"
             size="sm"
@@ -398,23 +497,90 @@ export const QualityCard = ({
           </Button>
         )}
 
-        {statusKey === 'VERIFICATION_REQUESTED' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.82rem', color: 'var(--slate-500)' }}>
-            <Clock size={14} color="#2563eb" />
-            Verification request logged. Inspector assignment in progress.
-          </div>
-        )}
-
-        {/* Prototype Inspector Simulation Button */}
+        {/* Buyer / FPO Quality Review Button */}
         <Button
           variant="outline-primary"
           size="sm"
           icon={UserCheck}
+          onClick={() => setIsBuyerReviewModalOpen(true)}
+        >
+          Record Buyer/FPO Quality Review
+        </Button>
+
+        {/* Prototype Inspector Simulation Button */}
+        <Button
+          variant="outline-secondary"
+          size="sm"
+          icon={ShieldCheck}
           onClick={() => setIsVerifyModalOpen(true)}
         >
-          {statusKey === 'VERIFIED' ? 'Review / Update Verification' : 'Simulate Quality Inspection'}
+          Simulate Officer Inspection
         </Button>
       </div>
+
+      {/* Modal: Buyer/FPO Quality Review */}
+      {isBuyerReviewModalOpen && (
+        <Modal
+          title="Buyer / FPO Quality Review"
+          isOpen={isBuyerReviewModalOpen}
+          onClose={() => setIsBuyerReviewModalOpen(false)}
+        >
+          <form onSubmit={handleBuyerReviewSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--slate-600)' }}>
+              Authorized review of farmer produce. Record visual/physical inspection status and observations. Original crop images remain preserved.
+            </p>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, marginBottom: '4px' }}>
+                Review Status Decision
+              </label>
+              <select
+                value={buyerReviewStatus}
+                onChange={(e) => setBuyerReviewStatus(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--border-color)',
+                  fontSize: '0.9rem',
+                }}
+              >
+                <option value="ACCEPTABLE">ACCEPTABLE (Quality Meets Standard)</option>
+                <option value="NEEDS_INSPECTION">NEEDS_INSPECTION (Physical Inspection Required)</option>
+                <option value="REJECTED">REJECTED (Quality Below Declared Grade)</option>
+              </select>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, marginBottom: '4px' }}>
+                Reviewer Notes & Observations
+              </label>
+              <textarea
+                rows={3}
+                value={buyerReviewNotes}
+                onChange={(e) => setBuyerReviewNotes(e.target.value)}
+                placeholder="e.g. Visual sample acceptable; moisture content is consistent with Grade A tomato batch."
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--border-color)',
+                  fontSize: '0.85rem',
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '10px' }}>
+              <Button variant="outline-primary" type="button" onClick={() => setIsBuyerReviewModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button variant="primary" type="submit" disabled={isSubmittingBuyerReview} icon={isSubmittingBuyerReview ? Loader2 : UserCheck}>
+                {isSubmittingBuyerReview ? 'Saving...' : 'Submit Review'}
+              </Button>
+            </div>
+          </form>
+        </Modal>
+      )}
 
       {/* Modal: Request Quality Verification */}
       {isRequestModalOpen && (
@@ -452,13 +618,13 @@ export const QualityCard = ({
                 rows={3}
                 value={requestNotes}
                 onChange={(e) => setRequestNotes(e.target.value)}
-                placeholder="e.g., Produce is packed in 20kg crates at Dindori farm shed. Available daily 9 AM - 4 PM."
+                placeholder="e.g., Produce stored in primary crates at farm gate; accessible between 8am and 12pm."
                 style={{
                   width: '100%',
                   padding: '8px 12px',
                   borderRadius: 'var(--radius-md)',
                   border: '1px solid var(--border-color)',
-                  fontSize: '0.88rem',
+                  fontSize: '0.85rem',
                 }}
               />
             </div>
@@ -474,22 +640,18 @@ export const QualityCard = ({
         </Modal>
       )}
 
-      {/* Modal: Inspector Quality Review Simulation */}
+      {/* Modal: Inspector Verify Simulation */}
       {isVerifyModalOpen && (
         <Modal
-          title="Authorized Quality Verification Review"
+          title="Physical Quality Inspection Audit"
           isOpen={isVerifyModalOpen}
           onClose={() => setIsVerifyModalOpen(false)}
         >
           <form onSubmit={handleInspectSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ fontSize: '0.85rem', color: 'var(--slate-600)' }}>
-              Conduct physical lot audit for <strong>{lot?.crop} (Lot #{lot?.id})</strong>.
-            </div>
-
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
               <div>
                 <label style={{ display: 'block', fontSize: '0.82rem', fontWeight: 600, marginBottom: '4px' }}>
-                  Verification Status
+                  Inspection Status
                 </label>
                 <select
                   value={verifyForm.verification_status}

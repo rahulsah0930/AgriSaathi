@@ -8,6 +8,7 @@ import {
   Input,
   Select,
   LoadingState,
+  CommodityAutocomplete,
 } from '../../components/common';
 import {
   Sparkles,
@@ -195,8 +196,8 @@ export const SaleAdvisorPage = ({ user, onNavigate }) => {
 
       {/* 2. Page Header */}
       <PageHeader
-        title="AI Net Return Sale Recommendation Engine"
-        subtitle="Mathematical optimization resolving the Farmer's dilemma: Storage Rent vs Price Appreciation vs Perishability Moisture Loss."
+        title="Net Return Sale Advisor & Decision Support"
+        subtitle="Empirical decision support resolving the Farmer's dilemma: Storage Rent vs Price Appreciation vs Perishability Moisture Loss vs FPO Aggregation."
         action={
           <div style={{ display: 'flex', gap: '10px' }}>
             <Button
@@ -217,6 +218,26 @@ export const SaleAdvisorPage = ({ user, onNavigate }) => {
         }
       />
 
+      {/* Advisory Prototype Notice */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          padding: '10px 16px',
+          backgroundColor: '#f8fafc',
+          border: '1px solid var(--border-color)',
+          borderRadius: 'var(--radius-md)',
+          fontSize: '0.82rem',
+          color: 'var(--slate-600)',
+        }}
+      >
+        <AlertCircle size={16} color="var(--slate-500)" style={{ flexShrink: 0 }} />
+        <span>
+          <strong>Advisory Notice:</strong> Decision-support outputs are advisory prototype estimates and should not replace physical quality inspection, official mandi data, or professional market judgment.
+        </span>
+      </div>
+
       {/* 3. Input Controls Card */}
       <Card>
         <div
@@ -227,22 +248,12 @@ export const SaleAdvisorPage = ({ user, onNavigate }) => {
             alignItems: 'flex-end',
           }}
         >
-          <div>
-            <label
-              style={{
-                display: 'block',
-                fontSize: '0.85rem',
-                fontWeight: 600,
-                color: 'var(--slate-700)',
-                marginBottom: '6px',
-              }}
-            >
-              Crop / Produce
-            </label>
-            <Select
-              options={CROP_OPTIONS}
+          <div style={{ minWidth: '220px' }}>
+            <CommodityAutocomplete
+              label="Crop / Produce"
               value={crop}
               onChange={(e) => setCrop(e.target.value)}
+              placeholder="Search produce..."
             />
           </div>
 
@@ -382,6 +393,43 @@ export const SaleAdvisorPage = ({ user, onNavigate }) => {
             >
               {recommendation.summary_reason}
             </p>
+
+            {/* Explainable Decision Factors */}
+            {recommendation.reasons && recommendation.reasons.length > 0 && (
+              <div
+                style={{
+                  marginTop: '14px',
+                  paddingTop: '12px',
+                  borderTop: '1px solid rgba(0, 0, 0, 0.08)',
+                }}
+              >
+                <div
+                  style={{
+                    fontSize: '0.8rem',
+                    fontWeight: 700,
+                    color: 'var(--slate-700)',
+                    marginBottom: '6px',
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.5px',
+                  }}
+                >
+                  Key Decision Support Factors:
+                </div>
+                <ul
+                  style={{
+                    margin: 0,
+                    paddingLeft: '18px',
+                    fontSize: '0.88rem',
+                    color: 'var(--slate-700)',
+                    lineHeight: 1.6,
+                  }}
+                >
+                  {recommendation.reasons.map((reason, idx) => (
+                    <li key={idx}>{reason}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
 
           <div
@@ -396,7 +444,7 @@ export const SaleAdvisorPage = ({ user, onNavigate }) => {
             }}
           >
             <div style={{ fontSize: '0.8rem', color: 'var(--slate-500)', textTransform: 'uppercase', fontWeight: 600 }}>
-              Net Pure Advantage
+              Estimated Net Advantage
             </div>
             <div
               style={{
@@ -409,7 +457,7 @@ export const SaleAdvisorPage = ({ user, onNavigate }) => {
               {recommendation.net_gain_vs_today >= 0 ? '+' : ''}₹{recommendation.net_gain_vs_today.toLocaleString('en-IN')}
             </div>
             <div style={{ fontSize: '0.82rem', color: 'var(--slate-600)', fontWeight: 500 }}>
-              Over selling immediately today
+              Estimated gain over spot sale
             </div>
           </div>
         </div>

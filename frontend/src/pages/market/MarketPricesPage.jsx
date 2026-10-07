@@ -10,6 +10,7 @@ import {
   SearchBar,
   Table,
   LoadingState,
+  CommodityAutocomplete,
 } from '../../components/common';
 import {
   TrendingUp,
@@ -146,7 +147,7 @@ export const MarketPricesPage = ({ user, onNavigate }) => {
       {/* 1. Page Header */}
       <PageHeader
         title="Maharashtra APMC Mandi Intelligence"
-        subtitle="Real-time daily modal rates across APMC Mandis with automated transport arbitrage and net return realization."
+        subtitle="Market Price Data — daily modal rates across APMC Mandis with automated transport arbitrage and net return realization."
         action={
           <div style={{ display: 'flex', gap: '10px' }}>
             <Button
@@ -167,6 +168,26 @@ export const MarketPricesPage = ({ user, onNavigate }) => {
         }
       />
 
+      {/* Advisory Prototype Disclaimer */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          padding: '10px 16px',
+          backgroundColor: '#f8fafc',
+          border: '1px solid var(--border-color)',
+          borderRadius: 'var(--radius-md)',
+          fontSize: '0.82rem',
+          color: 'var(--slate-600)',
+        }}
+      >
+        <AlertCircle size={16} color="var(--slate-500)" style={{ flexShrink: 0 }} />
+        <span>
+          <strong>Advisory Notice:</strong> Decision-support outputs are advisory prototype estimates and should not replace physical quality inspection, official mandi data, or professional market judgment.
+        </span>
+      </div>
+
       {/* 2. Primary Filter Controls */}
       <Card>
         <div
@@ -177,22 +198,12 @@ export const MarketPricesPage = ({ user, onNavigate }) => {
             alignItems: 'center',
           }}
         >
-          <div>
-            <label
-              style={{
-                display: 'block',
-                fontSize: '0.85rem',
-                fontWeight: 600,
-                color: 'var(--slate-700)',
-                marginBottom: '6px',
-              }}
-            >
-              Select Produce / Crop
-            </label>
-            <Select
-              options={CROP_OPTIONS}
+          <div style={{ minWidth: '220px' }}>
+            <CommodityAutocomplete
+              label="Select Produce / Crop"
               value={selectedCrop}
               onChange={(e) => setSelectedCrop(e.target.value)}
+              placeholder="Search produce..."
             />
           </div>
 
@@ -553,6 +564,22 @@ export const MarketPricesPage = ({ user, onNavigate }) => {
                     )}
                   </div>
                 ),
+              },
+              {
+                header: 'Data Source',
+                render: (row) => {
+                  const sType = row.source_type || 'HISTORICAL';
+                  const badgeVariant = sType === 'LIVE' ? 'success' : (sType === 'HISTORICAL' ? 'info' : (sType === 'SYNTHETIC' ? 'danger' : 'warning'));
+                  const badgeLabel = sType === 'LIVE' ? 'Live Source' : (sType === 'HISTORICAL' ? 'Historical' : (sType === 'SYNTHETIC' ? 'Synthetic' : 'Sample'));
+                  return (
+                    <div>
+                      <Badge variant={badgeVariant}>{badgeLabel}</Badge>
+                      <div style={{ fontSize: '0.74rem', color: 'var(--slate-500)', marginTop: '4px' }}>
+                        {row.source_date || row.date}
+                      </div>
+                    </div>
+                  );
+                },
               },
               {
                 header: 'Action',

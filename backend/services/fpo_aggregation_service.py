@@ -1,80 +1,81 @@
 from datetime import datetime, timedelta
 from models import db
-from models.notification import Notification
+from models.notification import Notification, NotificationEvent, emit_idempotent_notification
 from models.lot import FPOLotMember
+from models.commodity import Commodity
 
 CROP_PERISHABILITY_PROFILES = {
     'Tomato': {
-        'category': 'VERY_HIGH',
+        'category': 'HIGH',
         'ambient_shelf_life_hours': 36,
-        'base_ambient_window_hours': 10,
+        'base_ambient_window_hours': 12,
         'base_cold_window_hours': 24,
         'risk_level': 'HIGH',
-        'reason': 'Tomato is highly perishable with ambient shelf-life of 24–48 hours. Aggregating within a 10-hour window prevents heat stress, softness, and post-harvest spoilage before cold-chain dispatch.'
+        'reason': 'Tomato is highly perishable. Recommended collection window is 12 hours to prevent heat stress, softness, and post-harvest spoilage before cold-chain dispatch.'
     },
     'Grapes': {
-        'category': 'VERY_HIGH',
+        'category': 'HIGH',
         'ambient_shelf_life_hours': 48,
-        'base_ambient_window_hours': 12,
+        'base_ambient_window_hours': 18,
         'base_cold_window_hours': 36,
         'risk_level': 'HIGH',
-        'reason': 'Grapes are susceptible to berry drop and dehydration under ambient conditions. A 12-hour collection window is recommended to reach pre-cooling facilities quickly.'
+        'reason': 'Grapes are susceptible to berry drop and dehydration under ambient conditions. An 18-hour collection window is recommended.'
     },
     'Strawberry': {
-        'category': 'VERY_HIGH',
+        'category': 'HIGH',
         'ambient_shelf_life_hours': 24,
-        'base_ambient_window_hours': 8,
+        'base_ambient_window_hours': 12,
         'base_cold_window_hours': 24,
         'risk_level': 'HIGH',
-        'reason': 'Strawberries lose firmness rapidly. Immediate aggregation within 8 hours is essential for supermarket and export quality.'
+        'reason': 'Strawberries lose firmness rapidly. Immediate aggregation within 12 hours is recommended.'
     },
     'Pomegranate': {
-        'category': 'HIGH',
+        'category': 'MEDIUM',
         'ambient_shelf_life_hours': 120,
-        'base_ambient_window_hours': 24,
-        'base_cold_window_hours': 48,
+        'base_ambient_window_hours': 48,
+        'base_cold_window_hours': 72,
         'risk_level': 'MEDIUM',
-        'reason': 'Pomegranates have moderate aril resilience but suffer rind discoloration if left in warm sun. A 24-hour collection window balances harvesting schedules with export quality.'
+        'reason': 'Pomegranates have moderate ambient stability. A 48-hour collection window balances harvesting schedules with market quality.'
     },
     'Onion': {
         'category': 'MEDIUM',
         'ambient_shelf_life_hours': 720,
-        'base_ambient_window_hours': 72,
-        'base_cold_window_hours': 120,
-        'risk_level': 'LOW',
-        'reason': 'Cured onions have good ambient storage stability. A 72-hour (3-day) aggregation window allows farmers from surrounding villages to deliver produce without risk of degradation.'
+        'base_ambient_window_hours': 48,
+        'base_cold_window_hours': 72,
+        'risk_level': 'MEDIUM',
+        'reason': 'Cured onions have good ambient storage stability. A 48-hour aggregation window allows farmers from surrounding villages to deliver produce.'
     },
     'Potato': {
         'category': 'MEDIUM',
         'ambient_shelf_life_hours': 720,
-        'base_ambient_window_hours': 72,
-        'base_cold_window_hours': 120,
-        'risk_level': 'LOW',
-        'reason': 'Potatoes are resilient under shaded ambient conditions. A 72-hour window facilitates bulk grading and bag packing.'
+        'base_ambient_window_hours': 48,
+        'base_cold_window_hours': 72,
+        'risk_level': 'MEDIUM',
+        'reason': 'Potatoes are resilient under shaded ambient conditions. A 48-hour window facilitates bulk grading and bag packing.'
     },
     'Soybean': {
         'category': 'LOW',
         'ambient_shelf_life_hours': 4320,
-        'base_ambient_window_hours': 168,
-        'base_cold_window_hours': 168,
+        'base_ambient_window_hours': 72,
+        'base_cold_window_hours': 120,
         'risk_level': 'LOW',
-        'reason': 'Soybean is dry oilseed grain with low perishability at standard moisture (<12%). A 7-day (168h) window provides ample time for large-volume mandi/processing aggregation.'
+        'reason': 'Soybean is dry oilseed grain with low perishability at standard moisture (<12%). A 72-hour window provides ample time for large-volume aggregation.'
     },
     'Wheat': {
         'category': 'LOW',
         'ambient_shelf_life_hours': 8760,
-        'base_ambient_window_hours': 168,
-        'base_cold_window_hours': 168,
+        'base_ambient_window_hours': 72,
+        'base_cold_window_hours': 120,
         'risk_level': 'LOW',
-        'reason': 'Wheat is non-perishable dry grain. A 7-day window enables thorough member mobilization and full truckload formation.'
+        'reason': 'Wheat is non-perishable dry grain. A 72-hour window enables thorough member mobilization and full truckload formation.'
     },
     'Cotton': {
         'category': 'LOW',
         'ambient_shelf_life_hours': 8760,
-        'base_ambient_window_hours': 168,
-        'base_cold_window_hours': 168,
+        'base_ambient_window_hours': 72,
+        'base_cold_window_hours': 120,
         'risk_level': 'LOW',
-        'reason': 'Seed cotton can be safely collected over a 7-day period for ginning mill aggregation batches.'
+        'reason': 'Seed cotton can be safely collected over a 72-hour period for ginning mill aggregation batches.'
     },
 }
 
@@ -92,13 +93,78 @@ def get_weather_risk_factor(district=None):
 def get_smart_collection_duration(crop, storage_status='NOT_STORED', target_quantity=None, unit='kg'):
     """
     Generates a transparent, agronomic advisory recommendation for collection window duration.
+    Authoritatively queries Commodity.default_collection_window_hours and Commodity.perishability_class.
     Does NOT use fake random AI values or guarantee crop shelf life.
     """
     clean_crop = crop.strip() if crop else 'Tomato'
-    profile = CROP_PERISHABILITY_PROFILES.get(clean_crop)
+    commodity = None
 
+    # 1. Direct canonical name lookup
+    try:
+        commodity = Commodity.query.filter(Commodity.canonical_name.ilike(clean_crop)).first()
+        if not commodity:
+            from services.commodity_service import resolve_commodity_name
+            canon = resolve_commodity_name(clean_crop)
+            if canon:
+                commodity = Commodity.query.filter_by(canonical_name=canon).first()
+    except Exception:
+        pass
+
+    is_cold_storage = (storage_status == 'IN_STORAGE')
+
+    if commodity:
+        base_hours = float(commodity.default_collection_window_hours or 24.0)
+        p_class = commodity.perishability_class or 'MEDIUM'
+        canon_name = commodity.canonical_name
+        cid = commodity.id
+
+        if is_cold_storage:
+            if p_class == 'HIGH':
+                suggested_hours = base_hours * 2.0
+            elif p_class == 'MEDIUM':
+                suggested_hours = base_hours * 1.5
+            else:
+                suggested_hours = base_hours
+        else:
+            suggested_hours = base_hours
+
+        risk_level = 'HIGH' if p_class == 'HIGH' else ('MEDIUM' if p_class == 'MEDIUM' else 'LOW')
+
+        if p_class == 'HIGH':
+            reason = f"{canon_name} has high perishability. Recommended collection window is {suggested_hours:g} hours to prevent field heat accumulation and preserve fresh grade before dispatch."
+        elif p_class == 'MEDIUM':
+            reason = f"{canon_name} has moderate shelf stability. Recommended collection window is {suggested_hours:g} hours to allow cluster mobilization and packhouse sorting."
+        else:
+            reason = f"{canon_name} has low perishability. Recommended collection window is {suggested_hours:g} hours to enable broad member aggregation across villages."
+
+        if is_cold_storage:
+            reason += ' Cold-storage availability safely extends the collection window.'
+
+        factors = {
+            'crop': canon_name,
+            'commodity_id': cid,
+            'perishability_category': p_class,
+            'perishability_class': p_class,
+            'storage_condition': storage_status,
+            'cold_storage_available': is_cold_storage,
+            'weather_integration': get_weather_risk_factor()
+        }
+
+        return {
+            'crop': canon_name,
+            'commodity_id': cid,
+            'suggested_hours': suggested_hours,
+            'risk_level': risk_level,
+            'perishability_category': p_class,
+            'perishability_class': p_class,
+            'reason': reason,
+            'factors_considered': factors,
+            'disclaimer': 'Operational advisory guideline. Actual shelf life depends on farm-gate harvest conditions, sorting, and ambient transport temperature.'
+        }
+
+    # Fallback to static profile or sensible default
+    profile = CROP_PERISHABILITY_PROFILES.get(clean_crop)
     if not profile:
-        # Fallback check partial matches
         for known_crop, p in CROP_PERISHABILITY_PROFILES.items():
             if known_crop.lower() in clean_crop.lower():
                 profile = p
@@ -108,22 +174,22 @@ def get_smart_collection_duration(crop, storage_status='NOT_STORED', target_quan
         profile = {
             'category': 'MEDIUM',
             'ambient_shelf_life_hours': 72,
-            'base_ambient_window_hours': 24,
-            'base_cold_window_hours': 48,
+            'base_ambient_window_hours': 48,
+            'base_cold_window_hours': 72,
             'risk_level': 'MEDIUM',
             'reason': f'{clean_crop} standard aggregation window recommendation based on ambient handling norms.'
         }
 
-    is_cold_storage = (storage_status == 'IN_STORAGE')
     suggested_hours = profile['base_cold_window_hours'] if is_cold_storage else profile['base_ambient_window_hours']
-
     reason = profile['reason']
     if is_cold_storage:
         reason += ' Cold-storage availability safely extends the collection window.'
 
     factors = {
         'crop': clean_crop,
+        'commodity_id': None,
         'perishability_category': profile['category'],
+        'perishability_class': profile['category'],
         'storage_condition': storage_status,
         'cold_storage_available': is_cold_storage,
         'weather_integration': get_weather_risk_factor()
@@ -131,21 +197,29 @@ def get_smart_collection_duration(crop, storage_status='NOT_STORED', target_quan
 
     return {
         'crop': clean_crop,
+        'commodity_id': None,
         'suggested_hours': suggested_hours,
         'risk_level': profile['risk_level'],
         'perishability_category': profile['category'],
+        'perishability_class': profile['category'],
         'reason': reason,
         'factors_considered': factors,
-        'disclaimer': 'Advisory guideline only. Actual shelf life depends on farm-gate harvest conditions, sorting, and ambient transport temperature.'
+        'disclaimer': 'Operational advisory guideline. Actual shelf life depends on farm-gate harvest conditions, sorting, and ambient transport temperature.'
     }
 
 def evaluate_aggregation_status(lot, commit=True):
     """
     Authoritative backend evaluation of an aggregation lot lifecycle:
-    - Checks deadline against server time
+    - Checks deadline against server time (UTC)
     - Calculates committed quantity vs target
-    - Transitions status: OPEN -> CLOSING_SOON (90%) -> FILLED (100%) or EXPIRED
-    - Generates strictly IDEMPOTENT notifications for 90%, 100%, and deadline expiration.
+    - Deterministic Transitions: OPEN -> NEAR_CAPACITY (90%) -> FILLED (100%) or EXPIRED
+    - Generates strictly IDEMPOTENT notifications using NotificationEvent keys:
+        aggregation:<id>:near_capacity
+        aggregation:<id>:filled:fpo
+        aggregation:<id>:filled:farmer:<farmer_id>
+        aggregation:<id>:deadline_warning
+        aggregation:<id>:expired:fpo
+        aggregation:<id>:expired:farmer:<farmer_id>
     """
     if not lot or lot.seller_type != 'FPO':
         return getattr(lot, 'aggregation_status', 'OPEN')
@@ -162,29 +236,43 @@ def evaluate_aggregation_status(lot, commit=True):
     changed = False
 
     # 1. Check Deadline Expiration
-    if lot.collection_deadline_at and now > lot.collection_deadline_at:
+    if lot.collection_deadline_at and now >= lot.collection_deadline_at:
         if committed_qty < target_qty:
             if lot.aggregation_status != 'EXPIRED':
                 lot.aggregation_status = 'EXPIRED'
                 lot.status = 'EXPIRED'
                 changed = True
 
-            # Minimal idempotent notification for deadline reached
-            if lot.deadline_notified_at is None:
+            # Exactly ONE idempotent notification for FPO
+            event_key_fpo = f"aggregation:{lot.id}:expired:fpo"
+            exp_msg = f"{lot.crop} aggregation window has closed. {committed_qty:g} of {target_qty:g} {lot.unit} was collected."
+            notif = emit_idempotent_notification(
+                event_key=event_key_fpo,
+                recipient_user_id=lot.seller_id,
+                title=f"{lot.crop} Aggregation Window Closed",
+                message=exp_msg,
+                notif_type='FPO'
+            )
+            if notif:
                 lot.deadline_notified_at = now
                 changed = True
-                notif = Notification(
-                    user_id=lot.seller_id,
-                    title=f'{lot.crop} Collection Window Ended',
-                    message=f'Collection window for {lot.crop} (Lot #{lot.id}) ended with {committed_qty:g} {lot.unit} committed out of {target_qty:g} {lot.unit}. You can proceed with collected quantity or extend window.',
-                    type='FPO'
+
+            # Exactly ONE idempotent notification for each distinct contributing farmer
+            farmer_ids = {m.farmer_id for m in lot.members if m.farmer_id}
+            for f_id in farmer_ids:
+                event_key_farmer = f"aggregation:{lot.id}:expired:farmer:{f_id}"
+                emit_idempotent_notification(
+                    event_key=event_key_farmer,
+                    recipient_user_id=f_id,
+                    title=f"{lot.crop} Aggregation Window Closed",
+                    message=exp_msg,
+                    notif_type='FARMER'
                 )
-                db.session.add(notif)
 
             if changed and commit:
                 try:
                     db.session.commit()
-                except Exception as e:
+                except Exception:
                     db.session.rollback()
             return lot.aggregation_status
 
@@ -194,52 +282,90 @@ def evaluate_aggregation_status(lot, commit=True):
             lot.aggregation_status = 'FILLED'
             changed = True
 
-        # Minimal idempotent notification for 100% target reached
-        if lot.filled_notified_at is None:
+        # Exactly ONE idempotent notification for FPO
+        event_key_fpo = f"aggregation:{lot.id}:filled:fpo"
+        fill_msg = f"{lot.crop} aggregation requirement has been filled successfully."
+        notif = emit_idempotent_notification(
+            event_key=event_key_fpo,
+            recipient_user_id=lot.seller_id,
+            title=f"{lot.crop} Aggregation Filled",
+            message=fill_msg,
+            notif_type='FPO'
+        )
+        if notif:
             lot.filled_notified_at = now
             changed = True
-            notif = Notification(
-                user_id=lot.seller_id,
-                title=f'{lot.crop} Aggregation Target Reached',
-                message=f'{lot.crop} aggregation (Lot #{lot.id}) has reached its target of {target_qty:g} {lot.unit}. New contributions are now closed.',
-                type='FPO'
+
+        # Exactly ONE idempotent notification for each contributing farmer
+        farmer_ids = {m.farmer_id for m in lot.members if m.farmer_id}
+        for f_id in farmer_ids:
+            event_key_farmer = f"aggregation:{lot.id}:filled:farmer:{f_id}"
+            emit_idempotent_notification(
+                event_key=event_key_farmer,
+                recipient_user_id=f_id,
+                title=f"{lot.crop} Aggregation Filled",
+                message=fill_msg,
+                notif_type='FARMER'
             )
-            db.session.add(notif)
 
         if changed and commit:
             try:
                 db.session.commit()
-            except Exception as e:
+            except Exception:
                 db.session.rollback()
         return lot.aggregation_status
 
-    # 3. Check 90% Target Reached (CLOSING_SOON)
+    # 3. Check 90% Target Reached (NEAR_CAPACITY)
     if target_qty > 0 and committed_qty >= (0.9 * target_qty) and committed_qty < target_qty:
-        if lot.aggregation_status != 'CLOSING_SOON':
-            lot.aggregation_status = 'CLOSING_SOON'
+        if lot.aggregation_status != 'NEAR_CAPACITY':
+            lot.aggregation_status = 'NEAR_CAPACITY'
             changed = True
 
-        # Minimal idempotent notification for 90% near-capacity
-        if lot.near_capacity_notified_at is None:
+        # Exactly ONE idempotent notification for 90% near-capacity
+        event_key = f"aggregation:{lot.id}:near_capacity"
+        remaining = max(0.0, round(target_qty - committed_qty, 2))
+        near_msg = f"{lot.crop} requirement is 90% filled. Only {remaining:g} {lot.unit} remaining."
+        notif = emit_idempotent_notification(
+            event_key=event_key,
+            recipient_user_id=lot.seller_id,
+            title=f"{lot.crop} Aggregation 90% Full",
+            message=near_msg,
+            notif_type='FPO'
+        )
+        if notif:
             lot.near_capacity_notified_at = now
             changed = True
-            remaining = round(target_qty - committed_qty, 2)
-            notif = Notification(
-                user_id=lot.seller_id,
-                title=f'{lot.crop} Aggregation 90% Full',
-                message=f'{lot.crop} aggregation (Lot #{lot.id}) is 90% full. Only {remaining:g} {lot.unit} capacity remains.',
-                type='FPO'
+
+        # Check deadline warning if <= 2 hours remaining
+        if lot.collection_deadline_at and 0 < (lot.collection_deadline_at - now).total_seconds() <= 7200:
+            warn_key = f"aggregation:{lot.id}:deadline_warning"
+            emit_idempotent_notification(
+                event_key=warn_key,
+                recipient_user_id=lot.seller_id,
+                title=f"{lot.crop} Deadline Approaching",
+                message=f"{lot.crop} aggregation requirement closes in less than 2 hours. Current collection: {committed_qty:g} of {target_qty:g} {lot.unit}.",
+                notif_type='FPO'
             )
-            db.session.add(notif)
 
         if changed and commit:
             try:
                 db.session.commit()
-            except Exception as e:
+            except Exception:
                 db.session.rollback()
         return lot.aggregation_status
 
-    # 4. Standard OPEN Status (unless DRAFT)
+    # 4. Check Deadline Warning if OPEN and <= 2 hours remaining
+    if lot.collection_deadline_at and 0 < (lot.collection_deadline_at - now).total_seconds() <= 7200:
+        warn_key = f"aggregation:{lot.id}:deadline_warning"
+        emit_idempotent_notification(
+            event_key=warn_key,
+            recipient_user_id=lot.seller_id,
+            title=f"{lot.crop} Deadline Approaching",
+            message=f"{lot.crop} aggregation requirement closes in less than 2 hours. Current collection: {committed_qty:g} of {target_qty:g} {lot.unit}.",
+            notif_type='FPO'
+        )
+
+    # 5. Standard OPEN Status (unless DRAFT)
     if lot.aggregation_status not in ('DRAFT', 'OPEN'):
         lot.aggregation_status = 'OPEN'
         changed = True
@@ -247,7 +373,7 @@ def evaluate_aggregation_status(lot, commit=True):
     if changed and commit:
         try:
             db.session.commit()
-        except Exception as e:
+        except Exception:
             db.session.rollback()
 
     return lot.aggregation_status
@@ -270,7 +396,7 @@ def calculate_sell_urgency(crop, storage_status, verified_qty, created_at=None):
     category = profile['category'] if profile else 'MEDIUM'
     is_stored = (storage_status == 'IN_STORAGE')
 
-    if category == 'VERY_HIGH':
+    if category == 'HIGH':
         if not is_stored:
             return {
                 'priority': 'SELL URGENTLY',
@@ -284,7 +410,7 @@ def calculate_sell_urgency(crop, storage_status, verified_qty, created_at=None):
                 'reason': f'{clean_crop} is in cold storage. Controlled temperature retards ripening, but timely sale optimizes fresh premium.'
             }
 
-    if category == 'HIGH':
+    if category == 'MEDIUM':
         if not is_stored:
             return {
                 'priority': 'SELL SOON',

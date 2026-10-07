@@ -27,7 +27,8 @@ def run_aggregation_migration(db_path=None):
         ('near_capacity_notified_at', 'DATETIME'),
         ('filled_notified_at', 'DATETIME'),
         ('deadline_notified_at', 'DATETIME'),
-        ('deadline_extension_count', 'INTEGER DEFAULT 0')
+        ('deadline_extension_count', 'INTEGER DEFAULT 0'),
+        ('commodity_id', 'INTEGER')
     ]
 
     for col_name, col_type in new_crop_lot_cols:
@@ -41,6 +42,21 @@ def run_aggregation_migration(db_path=None):
     if 'farmer_id' not in existing_member_cols:
         print("[Migration] Adding farmer_id to fpo_lot_members...")
         cur.execute("ALTER TABLE fpo_lot_members ADD COLUMN farmer_id INTEGER")
+
+    # Ensure notification_events table exists
+    cur.execute('''
+        CREATE TABLE IF NOT EXISTS notification_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_key VARCHAR(150) UNIQUE NOT NULL,
+            recipient_user_id INTEGER,
+            notification_id INTEGER,
+            event_type VARCHAR(50) NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (recipient_user_id) REFERENCES users (id) ON DELETE CASCADE,
+            FOREIGN KEY (notification_id) REFERENCES notifications (id) ON DELETE SET NULL
+        )
+    ''')
+    cur.execute('CREATE INDEX IF NOT EXISTS idx_notif_events_key ON notification_events (event_key)')
 
     con.commit()
     con.close()

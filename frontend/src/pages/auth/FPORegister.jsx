@@ -79,7 +79,11 @@ export const FPORegister = ({ onBackToLanding, onRegisterSuccess, onSwitchToLogi
     try {
       const res = await api.post('/api/auth/register/fpo', formData);
       if (res.success) {
-        onRegisterSuccess(res.user, res.message);
+        if (res.token) {
+          api.setToken(res.token);
+          api.setUser(res.user);
+        }
+        onRegisterSuccess(res.user, res.message, res.token);
       } else {
         setError(res.message || 'FPO registration failed.');
       }

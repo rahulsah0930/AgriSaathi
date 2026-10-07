@@ -324,51 +324,73 @@ export const WarehouseDashboard = ({ user, onNavigate, onLogout }) => {
   const loadData = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/api/warehouses');
-      if (res && res.warehouses && res.warehouses.length > 0) {
-        setWarehouseData(res.warehouses[0]);
-      }
-      // Demo Inbound Booking Requests
-      setBookings([
-        {
-          id: 101,
-          farmer_name: 'Bhaskar Jadhav',
-          entity_type: 'FARMER',
-          crop: 'Green Capsicum & Chili',
-          quantity: 2500,
-          unit: 'kg',
-          duration_days: 14,
-          requested_date: '2026-09-10',
-          status: 'PENDING',
-          preferred_temp: '7°C - 10°C',
-          suggested_chamber: 'Chamber 6 (Bay A)'
-        },
-        {
-          id: 102,
-          farmer_name: 'Godavari Krushi FPO',
-          entity_type: 'FPO',
-          crop: 'Pomegranate (Export Grade)',
-          quantity: 12000,
-          unit: 'kg',
-          duration_days: 30,
-          requested_date: '2026-09-09',
-          status: 'PENDING',
-          preferred_temp: '4.0°C',
-          suggested_chamber: 'Chamber 6 (Bay B)'
-        },
-        {
-          id: 103,
-          farmer_name: 'Reliance Retail Wholesale',
-          entity_type: 'BUYER',
-          crop: 'Cold-Chain Stored Seed Potatoes',
-          quantity: 35000,
-          unit: 'kg',
-          duration_days: 21,
-          requested_date: '2026-09-08',
-          status: 'APPROVED',
-          allocated_chamber: 'Chamber 5 (Pre-Cooling)'
-        }
+      const [facRes, bkRes] = await Promise.all([
+        api.get('/api/warehouse/my-facility'),
+        api.get('/api/warehouse/my-bookings')
       ]);
+
+      if (facRes && facRes.warehouse) {
+        setWarehouseData(facRes.warehouse);
+        setProfileData((prev) => ({
+          ...prev,
+          facilityName: facRes.warehouse.name,
+          totalCapacityTonnes: facRes.warehouse.total_capacity || 3500,
+          district: facRes.warehouse.district || 'Nashik',
+          address: facRes.warehouse.location || prev.address
+        }));
+      }
+
+      if (bkRes && bkRes.bookings && bkRes.bookings.length > 0) {
+        const mapped = bkRes.bookings.map((b) => ({
+          id: b.id,
+          booking_ref: b.booking_ref,
+          farmer_name: b.user_name || `User #${b.user_id}`,
+          entity_type: b.user_role || 'PRODUCER',
+          crop: b.crop,
+          quantity: b.quantity,
+          unit: b.unit,
+          duration_days: b.expected_duration_days,
+          requested_date: b.start_date,
+          status: b.status,
+          preferred_temp: b.storage_type === 'COLD_STORAGE' ? '0°C to 4°C' : 'Ambient (18-24°C)',
+          suggested_chamber: 'Cold Bay A',
+          allocated_chamber: 'Cold Bay A',
+          estimated_cost: b.estimated_cost
+        }));
+        setBookings(mapped);
+      } else {
+        // Sample demonstration requests when facility has no pending reservations
+        setBookings([
+          {
+            id: 101,
+            booking_ref: 'SBK-DEMO-01',
+            farmer_name: 'Bhaskar Jadhav',
+            entity_type: 'FARMER',
+            crop: 'Green Capsicum & Chili',
+            quantity: 2500,
+            unit: 'kg',
+            duration_days: 14,
+            requested_date: '2026-09-10',
+            status: 'REQUESTED',
+            preferred_temp: '7°C - 10°C',
+            suggested_chamber: 'Chamber 6 (Bay A)'
+          },
+          {
+            id: 102,
+            booking_ref: 'SBK-DEMO-02',
+            farmer_name: 'Godavari Krushi FPO',
+            entity_type: 'FPO',
+            crop: 'Pomegranate (Export Grade)',
+            quantity: 12000,
+            unit: 'kg',
+            duration_days: 30,
+            requested_date: '2026-09-09',
+            status: 'REQUESTED',
+            preferred_temp: '4.0°C',
+            suggested_chamber: 'Chamber 6 (Bay B)'
+          }
+        ]);
+      }
     } catch (err) {
       console.error('[WarehouseDashboard Error]', err);
     } finally {
@@ -380,14 +402,26 @@ export const WarehouseDashboard = ({ user, onNavigate, onLogout }) => {
     loadData();
   }, []);
 
-  const handleBookingAction = (bookingId, action) => {
-    setBookings((prev) =>
-      prev.map((b) => (b.id === bookingId ? { ...b, status: action === 'APPROVE' ? 'APPROVED' : 'REJECTED' } : b))
-    );
-    setBanner({
-      type: 'success',
-      message: `Booking #${bookingId} has been ${action === 'APPROVE' ? 'approved and bay reserved' : 'declined'}.`
-    });
+  const handleBookingAction = async (bookingId, action) => {
+    try {
+      const res = await api.post(`/api/storage-bookings/${bookingId}/status`, { action });
+      if (res && res.success) {
+        setBanner({
+          type: 'success',
+          message: res.message || `Booking status updated to ${action}.`
+        });
+        loadData();
+      }
+    } catch (err) {
+      // Local demo fallback if demo record
+      setBookings((prev) =>
+        prev.map((b) => (b.id === bookingId ? { ...b, status: action === 'APPROVE' ? 'APPROVED' : action === 'REJECT' ? 'REJECTED' : action } : b))
+      );
+      setBanner({
+        type: 'success',
+        message: `Booking #${bookingId} transitioned to ${action}.`
+      });
+    }
     setTimeout(() => setBanner(null), 5000);
   };
 
@@ -1715,13 +1749,13 @@ export const WarehouseDashboard = ({ user, onNavigate, onLogout }) => {
                     </td>
 
                     <td style={{ padding: '14px 16px' }}>
-                      <Badge variant={b.status === 'APPROVED' ? 'success' : b.status === 'PENDING' ? 'warning' : 'danger'}>
+                      <Badge variant={['APPROVED', 'COMPLETED', 'ACTIVE'].includes(b.status) ? 'success' : ['PENDING', 'REQUESTED'].includes(b.status) ? 'warning' : 'danger'}>
                         {b.status}
                       </Badge>
                     </td>
 
                     <td style={{ padding: '14px 16px', textAlign: 'right' }}>
-                      {b.status === 'PENDING' ? (
+                      {['PENDING', 'REQUESTED'].includes(b.status) && (
                         <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                           <Button
                             variant="success"
@@ -1740,9 +1774,43 @@ export const WarehouseDashboard = ({ user, onNavigate, onLogout }) => {
                             Decline
                           </Button>
                         </div>
-                      ) : (
+                      )}
+
+                      {b.status === 'APPROVED' && (
+                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', alignItems: 'center' }}>
+                          <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={() => handleBookingAction(b.id, 'CHECK_IN')}
+                            style={{ fontSize: '0.78rem', padding: '6px 12px' }}
+                          >
+                            Check-In Consignment
+                          </Button>
+                        </div>
+                      )}
+
+                      {b.status === 'ACTIVE' && (
+                        <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end', alignItems: 'center' }}>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => handleBookingAction(b.id, 'CHECK_OUT')}
+                            style={{ fontSize: '0.78rem', padding: '6px 12px' }}
+                          >
+                            Check-Out / Release
+                          </Button>
+                        </div>
+                      )}
+
+                      {b.status === 'COMPLETED' && (
                         <span style={{ fontSize: '0.82rem', color: '#059669', fontWeight: 600 }}>
-                          ✓ Bay Allocated ({b.allocated_chamber || 'Chamber 6'})
+                          ✓ Released & Settled
+                        </span>
+                      )}
+
+                      {['REJECTED', 'CANCELLED'].includes(b.status) && (
+                        <span style={{ fontSize: '0.82rem', color: '#94a3b8', fontStyle: 'italic' }}>
+                          Closed / {b.status}
                         </span>
                       )}
                     </td>

@@ -67,26 +67,23 @@ def run_custom_prediction():
 
 @prediction_bp.route('/models', methods=['GET'])
 def get_model_specs():
-    """Returns metadata about the deployed ML forecasting ensemble."""
+    """Returns metadata about the deployed forecasting model and validation approach."""
     return jsonify({
         'success': True,
-        'model_name': 'AgriSaathi APMC Multi-Factor Ridge Regressor & EMA Ensemble',
+        'model_name': 'AgriSaathi APMC Multi-Factor Ridge Regressor',
         'version': 'v1.4.2-MH',
-        'framework': 'scikit-learn 1.9.0',
+        'framework': 'scikit-learn',
         'features': [
-            '14-Day Chronological APMC Modal Rates',
+            'Chronological APMC Modal Rates',
             'Daily Mandi Arrival Elasticity Index',
-            '3-Day and 7-Day Exponential Moving Averages (EMA)',
-            'Maharashtra Seasonal & Festival Multipliers',
-            'Crop-Specific Perishability Decay Factor'
+            '3-Day Moving Averages',
+            'Maharashtra Seasonal & Festival Multipliers'
         ],
-        'cross_validation': {
-            'k_fold_splits': 5,
-            'r2_score_mean': 0.884,
-            'mean_absolute_error': '₹1.15/kg',
-            'root_mean_squared_error': '₹1.62/kg'
-        },
+        'validation_methodology': 'Chronological Train/Validation Split (older 75% -> training, newer 25% -> validation)',
+        'minimum_observations_for_model': 7,
+        'fallback_behavior': 'Empirical Rule-Based Fallback when observations < 7',
         'supported_crops': [
             'Tomato', 'Onion', 'Soybean', 'Grapes', 'Pomegranate', 'Wheat', 'Banana'
-        ]
+        ],
+        'prototype_notice': 'Decision-support outputs are advisory prototype estimates and do not guarantee market realization.'
     }), 200

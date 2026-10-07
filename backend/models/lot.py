@@ -28,6 +28,8 @@ class CropLot(db.Model):
     storage_status = db.Column(db.Enum('NOT_STORED', 'IN_STORAGE', 'SCHEDULED', name='storage_statuses'), default='NOT_STORED')
     image_url = db.Column(db.String(255), nullable=True)
     status = db.Column(db.Enum('DRAFT', 'ACTIVE', 'RESERVED', 'SOLD', 'EXPIRED', 'CANCELLED', name='lot_statuses'), default='ACTIVE')
+    commodity_id = db.Column(db.Integer, db.ForeignKey('commodities.id'), nullable=True)
+    commodity = db.relationship('Commodity', foreign_keys=[commodity_id], lazy='select')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -99,24 +101,36 @@ class CropLot(db.Model):
             time_remaining_sec = max(0, int(diff_sec))
             is_expired = diff_sec <= 0
 
+        window_hours = None
+        if self.collection_start_at and self.collection_deadline_at:
+            window_hours = round((self.collection_deadline_at - self.collection_start_at).total_seconds() / 3600.0, 1)
+
         return {
             'id': self.id,
             'seller_id': self.seller_id,
+            'created_by': self.seller_id,
             'seller_type': self.seller_type,
             'seller_name': self.seller_name,
             'seller_verification_status': self.seller_verification_status,
             'crop': self.crop,
+            'commodity_id': self.commodity_id,
+            'commodity': self.commodity.to_dict() if self.commodity else None,
             'variety': self.variety or 'Standard',
             'quantity': self.quantity,
             'target_quantity': target_qty,
             'committed_quantity': committed_qty,
+            'collected_quantity': committed_qty,
             'received_quantity': received_qty,
             'verified_quantity': verified_qty,
             'available_for_sale': available_for_sale,
             'remaining_capacity': remaining_capacity,
+            'remaining_quantity': remaining_capacity,
             'percentage_filled': pct_filled,
             'collection_start_at': self.collection_start_at.isoformat() if self.collection_start_at else None,
+            'start_time': self.collection_start_at.isoformat() if self.collection_start_at else None,
             'collection_deadline_at': self.collection_deadline_at.isoformat() if self.collection_deadline_at else None,
+            'deadline': self.collection_deadline_at.isoformat() if self.collection_deadline_at else None,
+            'collection_window_hours': window_hours,
             'delivery_deadline_at': self.delivery_deadline_at.isoformat() if self.delivery_deadline_at else None,
             'collection_window_source': self.collection_window_source or 'MANUAL',
             'aggregation_status': self.aggregation_status or 'OPEN',
@@ -230,15 +244,23 @@ class QualityReport(db.Model):
     verification_status = db.Column(
         db.String(50),
         default='SELF_REPORTED'
-    )  # 'SELF_REPORTED', 'VERIFICATION_REQUESTED', 'UNDER_REVIEW', 'VERIFIED', 'REJECTED', 'REQUIRES_RECHECK'
-    # AI-Assisted Visual Quality Verification
-    ai_verification_status = db.Column(db.String(50), default='PASSED')  # 'PENDING', 'PASSED', 'FLAGGED', 'MANUAL_REVIEW'
-    ai_score = db.Column(db.Float, default=0.92)
+    )  # 'SELF_REPORTED', 'VERIFICATION_REQUESTED', 'UNDER_REVIEW', 'VERIFIED', 'REJECTED', 'REQUIRES_RECHECK', 'NEEDS_INSPECTION'
+    
+    # Deterministic Visual Quality Assistance (No fake AI)
+    image_validation_status = db.Column(db.String(50), default='PASSED')  # 'PASSED', 'FLAGGED', 'INVALID'
+    ai_verification_status = db.Column(db.String(50), default='PASSED')
+    ai_score = db.Column(db.Float, nullable=True)
     ai_crop_consistency = db.Column(db.Boolean, default=True)
-    ai_quality_assessment = db.Column(db.String(50), default='SUFFICIENT')  # 'SUFFICIENT', 'INSUFFICIENT'
-    ai_signals = db.Column(db.Text, default='AI Visual Check: Produce color, texture, and size distribution are consistent. No spoilage markers detected.')
+    ai_quality_assessment = db.Column(db.String(50), default='SUFFICIENT')
+    ai_signals = db.Column(db.Text, default='Image validation passed. Visual properties consistent.')
     ai_reviewed_by_admin = db.Column(db.Boolean, default=False)
     ai_review_notes = db.Column(db.Text, nullable=True)
+
+    # Buyer/FPO Review
+    buyer_review_status = db.Column(db.String(50), nullable=True)  # 'ACCEPTABLE', 'NEEDS_INSPECTION', 'REJECTED'
+    buyer_review_notes = db.Column(db.Text, nullable=True)
+    buyer_reviewed_by = db.Column(db.String(150), nullable=True)
+    buyer_reviewed_at = db.Column(db.DateTime, nullable=True)
 
     verified_by = db.Column(db.String(150), nullable=True)
     verifier_role = db.Column(db.String(100), nullable=True)  # 'FPO_REPRESENTATIVE', 'BUYER_INSPECTOR', 'AUTHORIZED_OFFICER'
@@ -255,23 +277,31 @@ class QualityReport(db.Model):
             'id': self.id,
             'crop_lot_id': self.crop_lot_id,
             'seller_declared_grade': self.seller_declared_grade,
+            'seller_attributes_label': 'Seller Provided',
             'verified_grade': self.verified_grade,
             'condition_summary': self.condition_summary or 'Freshly Harvested',
             'moisture_percentage': self.moisture_percentage,
             'damage_percentage': self.damage_percentage,
             'freshness_status': self.freshness_status or 'FRESH',
             'verification_status': self.verification_status or 'SELF_REPORTED',
-            'ai_verification_status': self.ai_verification_status or 'PASSED',
-            'ai_score': round(self.ai_score, 2) if self.ai_score is not None else 0.90,
+            'image_validation_status': self.image_validation_status or self.ai_verification_status or 'PASSED',
+            'ai_verification_status': self.ai_verification_status or self.image_validation_status or 'PASSED',
+            'ai_score': round(self.ai_score, 2) if self.ai_score is not None else None,
             'ai_crop_consistency': self.ai_crop_consistency if self.ai_crop_consistency is not None else True,
             'ai_quality_assessment': self.ai_quality_assessment or 'SUFFICIENT',
-            'ai_signals': self.ai_signals or 'Visual check passed.',
+            'ai_signals': self.ai_signals or 'Image integrity check passed.',
             'ai_reviewed_by_admin': self.ai_reviewed_by_admin or False,
             'ai_review_notes': self.ai_review_notes,
+            'buyer_review_status': self.buyer_review_status,
+            'buyer_review_notes': self.buyer_review_notes,
+            'buyer_reviewed_by': self.buyer_reviewed_by,
+            'buyer_reviewed_at': self.buyer_reviewed_at.isoformat() if self.buyer_reviewed_at else None,
             'verified_by': self.verified_by,
             'verifier_role': self.verifier_role,
             'verification_date': self.verification_date,
             'verifier_notes': self.verifier_notes,
+            'prototype_assistance_label': 'Automated image validation and rule-based assistance. Final quality should be physically verified by the buyer/FPO.',
+            'no_vision_model_claim': 'No trained crop-quality computer vision model is currently used in this prototype.',
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }

@@ -70,6 +70,8 @@ export const StorageDiscoveryPage = ({ user, onNavigate }) => {
   const [isSubmittingBooking, setIsSubmittingBooking] = useState(false);
   const [bookingSuccessBanner, setBookingSuccessBanner] = useState(null);
 
+  const [cropRecommendation, setCropRecommendation] = useState(null);
+
   const fetchWarehouses = useCallback(async () => {
     setIsLoading(true);
     setError(null);
@@ -77,13 +79,14 @@ export const StorageDiscoveryPage = ({ user, onNavigate }) => {
       let url = '/api/warehouses?';
       if (selectedDistrict !== 'ALL') url += `district=${encodeURIComponent(selectedDistrict)}&`;
       if (selectedType !== 'ALL') url += `storage_type=${encodeURIComponent(selectedType)}&`;
-      if (searchQuery) url += `search=${encodeURIComponent(searchQuery)}&`;
+      if (searchQuery) url += `search=${encodeURIComponent(searchQuery)}&crop=${encodeURIComponent(searchQuery)}&`;
 
       const data = await api.get(url);
       setWarehouses(data.warehouses || []);
+      setCropRecommendation(data.crop_recommendation || null);
 
       // Also fetch user bookings
-      const bookingsData = await api.get(`/api/storage-bookings?user_id=${user?.id || 1}`);
+      const bookingsData = await api.get('/api/storage-bookings');
       setMyBookings(bookingsData.bookings || []);
     } catch (err) {
       console.error('Failed to load warehouses:', err);
@@ -255,6 +258,29 @@ export const StorageDiscoveryPage = ({ user, onNavigate }) => {
             </span>
           </div>
 
+          {cropRecommendation && (
+            <div
+              style={{
+                marginBottom: '16px',
+                padding: '12px 16px',
+                backgroundColor: '#eff6ff',
+                border: '1px solid #bfdbfe',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '0.85rem',
+                color: '#1e40af',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+              }}
+            >
+              <Sprout size={18} />
+              <div>
+                <strong>{cropRecommendation.label}: </strong>
+                <span>{cropRecommendation.recommendation_text}</span>
+              </div>
+            </div>
+          )}
+
           <div
             style={{
               display: 'grid',
@@ -284,6 +310,24 @@ export const StorageDiscoveryPage = ({ user, onNavigate }) => {
                       <Badge variant={wh.storage_type === 'COLD_STORAGE' ? 'info' : wh.storage_type === 'CONTROLLED' ? 'warning' : 'neutral'}>
                         {wh.storage_type ? wh.storage_type.replace('_', ' ') : 'COLD STORAGE'}
                       </Badge>
+                      {wh.verification_status === 'VERIFIED' && (
+                        <span
+                          style={{
+                            backgroundColor: '#dcfce7',
+                            color: '#15803d',
+                            border: '1px solid #bbf7d0',
+                            padding: '2px 8px',
+                            borderRadius: '12px',
+                            fontSize: '0.72rem',
+                            fontWeight: 700,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '3px',
+                          }}
+                        >
+                          ✓ Verified on AgriSaathi Prototype
+                        </span>
+                      )}
                       {(wh.is_new || wh.id > 3) && (
                         <span
                           style={{
@@ -313,10 +357,15 @@ export const StorageDiscoveryPage = ({ user, onNavigate }) => {
                   <h4 style={{ margin: '6px 0 4px 0', fontSize: '1.1rem', fontWeight: 700, color: 'var(--slate-900)' }}>
                     {wh.name}
                   </h4>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.82rem', color: 'var(--slate-600)', marginBottom: '14px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.82rem', color: 'var(--slate-600)', marginBottom: '8px' }}>
                     <MapPin size={14} color="var(--primary-600)" />
                     <span>{wh.location}</span>
                   </div>
+                  {wh.approx_distance_km && (
+                    <div style={{ fontSize: '0.75rem', color: '#059669', fontWeight: 600, marginBottom: '10px' }}>
+                      📍 Approx. {wh.approx_distance_km} km (Approximate distance)
+                    </div>
+                  )}
 
                   {/* Specs Pill Box */}
                   <div style={{ backgroundColor: '#f8fafc', borderRadius: 'var(--radius-md)', padding: '12px', marginBottom: '14px', fontSize: '0.83rem' }}>

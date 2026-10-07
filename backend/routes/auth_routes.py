@@ -1,10 +1,30 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from models import db
-from models.user import User, FarmerProfile, FPOProfile, BuyerProfile, WarehouseProfile
+from models.user import User, FarmerProfile, FPOProfile, BuyerProfile, WarehouseProfile, LogisticsProfile
 from models.storage import Warehouse
 from utils.security import mask_aadhaar, mask_bank_account, mask_ifsc
+from utils.auth import (
+    generate_access_token,
+    jwt_required,
+    jwt_optional,
+    check_rate_limit,
+    record_failed_attempt,
+    clear_failed_attempts
+)
 
 auth_bp = Blueprint('auth', __name__, url_prefix='/api/auth')
+
+def validate_registration_inputs(phone, password, confirm_password):
+    """Sensible validation for registration inputs."""
+    if len(str(password)) < 6:
+        return 'Password must be at least 6 characters long.'
+    if password != confirm_password:
+        return 'Passwords do not match.'
+    digits = ''.join(filter(str.isdigit, str(phone)))
+    if len(digits) < 10:
+        return 'Please enter a valid 10-digit mobile number.'
+    return None
+
 
 @auth_bp.route('/register/farmer', methods=['POST'])
 def register_farmer():
@@ -19,11 +39,12 @@ def register_farmer():
                 'message': f"Field '{field}' is required."
             }), 400
 
-    if data['password'] != data['confirm_password']:
+    val_err = validate_registration_inputs(data.get('phone'), data.get('password'), data.get('confirm_password'))
+    if val_err:
         return jsonify({
             'success': False,
             'error': 'Validation Error',
-            'message': 'Passwords do not match.'
+            'message': val_err
         }), 400
 
     phone = str(data['phone']).strip()
@@ -73,10 +94,13 @@ def register_farmer():
         db.session.add(farmer_profile)
         db.session.commit()
 
+        token = generate_access_token(user)
         return jsonify({
             'success': True,
             'message': 'Registration successful. Your farmer profile is pending Government Verification.',
-            'user': user.to_dict()
+            'user': user.to_dict(),
+            'token': token,
+            'access_token': token
         }), 201
 
     except Exception as e:
@@ -101,11 +125,12 @@ def register_fpo():
                 'message': f"Field '{field}' is required."
             }), 400
 
-    if data['password'] != data['confirm_password']:
+    val_err = validate_registration_inputs(data.get('phone'), data.get('password'), data.get('confirm_password'))
+    if val_err:
         return jsonify({
             'success': False,
             'error': 'Validation Error',
-            'message': 'Passwords do not match.'
+            'message': val_err
         }), 400
 
     phone = str(data['phone']).strip()
@@ -148,10 +173,13 @@ def register_fpo():
         db.session.add(fpo_profile)
         db.session.commit()
 
+        token = generate_access_token(user)
         return jsonify({
             'success': True,
             'message': 'FPO registration submitted for Government Verification.',
-            'user': user.to_dict()
+            'user': user.to_dict(),
+            'token': token,
+            'access_token': token
         }), 201
 
     except Exception as e:
@@ -176,11 +204,12 @@ def register_buyer():
                 'message': f"Field '{field}' is required."
             }), 400
 
-    if data['password'] != data['confirm_password']:
+    val_err = validate_registration_inputs(data.get('phone'), data.get('password'), data.get('confirm_password'))
+    if val_err:
         return jsonify({
             'success': False,
             'error': 'Validation Error',
-            'message': 'Passwords do not match.'
+            'message': val_err
         }), 400
 
     phone = str(data['phone']).strip()
@@ -226,10 +255,13 @@ def register_buyer():
         db.session.add(buyer_profile)
         db.session.commit()
 
+        token = generate_access_token(user)
         return jsonify({
             'success': True,
             'message': 'Buyer company registration submitted. Verification is pending with Government Nodal Officer.',
-            'user': user.to_dict()
+            'user': user.to_dict(),
+            'token': token,
+            'access_token': token
         }), 201
 
     except Exception as e:
@@ -254,11 +286,12 @@ def register_warehouse():
                 'message': f"Field '{field}' is required."
             }), 400
 
-    if data['password'] != data['confirm_password']:
+    val_err = validate_registration_inputs(data.get('phone'), data.get('password'), data.get('confirm_password'))
+    if val_err:
         return jsonify({
             'success': False,
             'error': 'Validation Error',
-            'message': 'Passwords do not match.'
+            'message': val_err
         }), 400
 
     phone = str(data['phone']).strip()
@@ -336,11 +369,14 @@ def register_warehouse():
         db.session.add(warehouse_entry)
         db.session.commit()
 
+        token = generate_access_token(user)
         return jsonify({
             'success': True,
             'message': 'Cold storage facility registered and submitted for Government Verification.',
             'user': user.to_dict(),
-            'warehouse': warehouse_entry.to_dict()
+            'warehouse': warehouse_entry.to_dict(),
+            'token': token,
+            'access_token': token
         }), 201
 
     except Exception as e:
@@ -349,6 +385,94 @@ def register_warehouse():
             'success': False,
             'error': 'Internal Server Error',
             'message': f'Unable to complete Warehouse registration: {str(e)}'
+        }), 500
+
+
+@auth_bp.route('/register/logistics', methods=['POST'])
+def register_logistics():
+    data = request.get_json() or {}
+
+    required_fields = ['company_name', 'contact_person', 'phone', 'password', 'confirm_password']
+    for field in required_fields:
+        if not data.get(field) or not str(data.get(field)).strip():
+            return jsonify({
+                'success': False,
+                'error': 'Validation Error',
+                'message': f"Field '{field}' is required."
+            }), 400
+
+    val_err = validate_registration_inputs(data.get('phone'), data.get('password'), data.get('confirm_password'))
+    if val_err:
+        return jsonify({
+            'success': False,
+            'error': 'Validation Error',
+            'message': val_err
+        }), 400
+
+    phone = str(data['phone']).strip()
+    email = str(data.get('email', '')).strip() or None
+
+    if User.query.filter_by(phone=phone).first():
+        return jsonify({
+            'success': False,
+            'error': 'Conflict',
+            'message': f'A user with phone number {phone} is already registered.'
+        }), 409
+
+    if email and User.query.filter_by(email=email).first():
+        return jsonify({
+            'success': False,
+            'error': 'Conflict',
+            'message': f'A user with email {email} is already registered.'
+        }), 409
+
+    try:
+        user = User(
+            name=data['company_name'].strip(),
+            phone=phone,
+            email=email,
+            role='LOGISTICS',
+            verification_status='PENDING'
+        )
+        user.set_password(data['password'])
+        db.session.add(user)
+        db.session.flush()
+
+        logistics_profile = LogisticsProfile(
+            user_id=user.id,
+            company_name=data['company_name'].strip(),
+            contact_person=data['contact_person'].strip(),
+            phone=phone,
+            email=email,
+            vehicle_types=data.get('vehicle_types', 'MINI_TRUCK,PICKUP,LCV,TRUCK,REFRIGERATED_VEHICLE'),
+            vehicle_count=int(data.get('vehicle_count', 5)) if str(data.get('vehicle_count', '')).isdigit() else 5,
+            service_districts=data.get('service_districts', 'Nashik, Pune, Mumbai, Ahmednagar'),
+            availability_status=data.get('availability_status', 'AVAILABLE'),
+            license_number_masked=data.get('license_number'),
+            aadhaar_masked=mask_aadhaar(data.get('aadhaar') or data.get('aadhaar_number')),
+            bank_name=data.get('bank_name', 'State Bank of India'),
+            bank_account_masked=mask_bank_account(data.get('bank_account') or data.get('bank_account_no')),
+            ifsc_code_masked=mask_ifsc(data.get('ifsc_code')),
+            account_holder_name=data.get('account_holder_name') or data.get('contact_person')
+        )
+        db.session.add(logistics_profile)
+        db.session.commit()
+
+        token = generate_access_token(user)
+        return jsonify({
+            'success': True,
+            'message': 'Logistics provider registration submitted successfully.',
+            'user': user.to_dict(),
+            'token': token,
+            'access_token': token
+        }), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({
+            'success': False,
+            'error': 'Internal Server Error',
+            'message': f'Unable to complete logistics provider registration: {str(e)}'
         }), 500
 
 
@@ -366,15 +490,33 @@ def login():
             'message': 'Phone/Email and password are required.'
         }), 400
 
+    client_ip = request.headers.get('X-Forwarded-For', request.remote_addr or '127.0.0.1').split(',')[0].strip()
+    rate_key = f"{client_ip}:{identifier}"
+    allowed, retry_after = check_rate_limit(rate_key)
+    if not allowed:
+        return jsonify({
+            'success': False,
+            'error': 'Too Many Requests',
+            'message': f'Too many failed login attempts. Please wait {retry_after} seconds before trying again.'
+        }), 429
+
     # Look up user by phone or email
     user = User.query.filter((User.phone == identifier) | (User.email == identifier)).first()
 
     if not user or not user.check_password(password):
+        record_failed_attempt(rate_key)
         return jsonify({
             'success': False,
             'error': 'Invalid Credentials',
             'message': 'Invalid phone/email or password.'
         }), 401
+
+    if user.verification_status == 'SUSPENDED':
+        return jsonify({
+            'success': False,
+            'error': 'Account Suspended',
+            'message': 'This account has been suspended pending administrative review.'
+        }), 403
 
     if expected_role and user.role != expected_role:
         return jsonify({
@@ -383,12 +525,15 @@ def login():
             'message': f'This account is registered as {user.role}, not {expected_role}. Please switch to the {user.role} login option.'
         }), 403
 
+    clear_failed_attempts(rate_key)
+    access_token = generate_access_token(user)
+
     return jsonify({
         'success': True,
         'message': f'Login successful. Welcome back, {user.name or user.role}!',
         'user': user.to_dict(),
-        'token': f'session_token_{user.id}_{user.role.lower()}',
-        'access_token': f'session_token_{user.id}_{user.role.lower()}'
+        'token': access_token,
+        'access_token': access_token
     }), 200
 
 
@@ -464,21 +609,16 @@ def get_demo_accounts():
 
 
 @auth_bp.route('/me', methods=['GET'])
+@jwt_required
 def get_current_user():
-    user = User.query.first()
-    if user:
-        return jsonify({
-            'success': True,
-            'user': user.to_dict()
-        }), 200
-
     return jsonify({
-        'success': False,
-        'message': 'No active session.'
-    }), 404
+        'success': True,
+        'user': g.current_user.to_dict()
+    }), 200
 
 
 @auth_bp.route('/logout', methods=['POST'])
+@jwt_optional
 def logout():
     return jsonify({
         'success': True,

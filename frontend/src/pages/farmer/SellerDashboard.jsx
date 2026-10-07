@@ -330,7 +330,7 @@ export const SellerDashboard = ({
                               ? 'COMPLETED'
                               : row.aggregation_status === 'EXPIRED'
                               ? 'EXPIRED'
-                              : row.aggregation_status === 'CLOSING_SOON'
+                              : (row.aggregation_status === 'NEAR_CAPACITY' || row.aggregation_status === 'CLOSING_SOON')
                               ? 'IN_PROGRESS'
                               : row.status
                           }

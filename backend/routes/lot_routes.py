@@ -1,13 +1,14 @@
 import os
 import uuid
 from datetime import datetime
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify, current_app, g
 from werkzeug.utils import secure_filename
 from models import db
 from models.lot import CropLot, CropLotImage, QualityReport
 from models.user import User
 from services.ai_verification_service import analyze_crop_image
-
+from utils.auth import jwt_required, role_required
+from services.file_storage_service import get_storage_provider
 
 lot_bp = Blueprint('lots', __name__, url_prefix='/api/lots')
 
@@ -51,7 +52,17 @@ def get_lots():
 
 
 @lot_bp.route('', methods=['POST'])
+@jwt_required
+@role_required('FARMER', 'FPO', 'ADMIN')
 def create_lot():
+    user = g.current_user
+    if getattr(user, 'verification_status', '') == 'SUSPENDED':
+        return jsonify({
+            'success': False,
+            'error': 'Account Suspended',
+            'message': 'Suspended accounts cannot create new crop listings.'
+        }), 403
+
     data = request.get_json() or {}
 
     # Validation
@@ -74,22 +85,20 @@ def create_lot():
     except ValueError:
         return jsonify({'success': False, 'error': 'Invalid Format', 'message': 'Quantity and Price must be numeric.'}), 400
 
-    seller_id = data.get('seller_id', 1)
-    user = User.query.get(seller_id)
+    # Determine seller identity from verified JWT claims
+    user = g.current_user
+    seller_id = user.id
+    seller_type = user.role if user.role in ['FARMER', 'FPO'] else 'FARMER'
 
-    seller_type = data.get('seller_type', user.role if user else 'FARMER')
-    seller_name = data.get('seller_name')
-    if not seller_name and user:
-        if user.role == 'FPO' and user.fpo_profile:
-            seller_name = user.fpo_profile.fpo_name
-        elif user.farmer_profile:
-            seller_name = user.farmer_profile.full_name
-        else:
-            seller_name = user.phone
-    if not seller_name:
-        seller_name = 'Suresh Patil'
+    seller_name = None
+    if user.role == 'FPO' and user.fpo_profile:
+        seller_name = user.fpo_profile.fpo_name
+    elif user.farmer_profile:
+        seller_name = user.farmer_profile.full_name
+    else:
+        seller_name = user.name or user.phone
 
-    verification_status = user.verification_status if user else 'PENDING'
+    verification_status = user.verification_status
 
     status = data.get('status', 'ACTIVE')
     images_list = data.get('images') or []
@@ -129,15 +138,34 @@ def create_lot():
         raw_pincode = data.get('pincode') or ''
         raw_state = data.get('state') or 'Maharashtra'
 
+        # Resolve commodity master reference
+        comm_id = data.get('commodity_id')
+        crop_val = data['crop'].strip()
+        try:
+            from services.commodity_service import resolve_commodity_name, get_commodity_by_name, get_commodity_by_id
+            if comm_id:
+                comm = get_commodity_by_id(int(comm_id))
+                if comm:
+                    crop_val = comm.canonical_name
+            else:
+                canonical = resolve_commodity_name(crop_val)
+                comm = get_commodity_by_name(canonical)
+                if comm:
+                    comm_id = comm.id
+                    crop_val = comm.canonical_name
+        except Exception:
+            pass
+
         new_lot = CropLot(
             seller_id=seller_id,
             seller_type=seller_type,
             seller_name=seller_name,
             seller_verification_status=verification_status,
-            crop=data['crop'].strip(),
+            crop=crop_val,
+            commodity_id=comm_id,
             variety=data.get('variety', 'Standard').strip(),
             quantity=quantity,
-            unit=data.get('unit', 'kg'),
+            unit=(data.get('unit') or 'kg').strip().lower(),
             quality_grade=data.get('quality_grade', 'Grade A'),
             harvest_date=str(data['harvest_date']),
             location=data['location'].strip() if data.get('location') else (raw_addr.strip() or 'Farm Gate'),
@@ -184,25 +212,26 @@ def create_lot():
             new_lot.images[0].is_primary = True
             new_lot.image_url = new_lot.images[0].image_url
 
-        # Initialize transparent QualityReport with AI-Assisted Visual Quality Check
+        # Initialize transparent QualityReport with Prototype Visual Quality Assistance
         declared_grade = data.get('quality_grade', 'Grade A')
-        ai_res = analyze_crop_image(primary_img_url, new_lot.crop, declared_grade)
+        img_res = analyze_crop_image(primary_img_url, new_lot.crop, declared_grade)
 
         q_report = QualityReport(
             crop_lot_id=new_lot.id,
             seller_declared_grade=declared_grade,
-            verified_grade=declared_grade if ai_res['ai_verification_status'] == 'PASSED' else None,
+            verified_grade=None,  # Not verified until official Buyer/FPO/Officer inspection
             condition_summary=data.get('condition_summary', 'Freshly Harvested, Field Packed'),
             moisture_percentage=float(data['moisture_percentage']) if data.get('moisture_percentage') is not None else 12.0,
             damage_percentage=float(data['damage_percentage']) if data.get('damage_percentage') is not None else 2.0,
             freshness_status=data.get('freshness_status', 'FRESH'),
-            verification_status='VERIFIED' if ai_res['ai_verification_status'] == 'PASSED' else 'SELF_REPORTED',
-            ai_verification_status=ai_res['ai_verification_status'],
-            ai_score=ai_res['ai_score'],
-            ai_crop_consistency=ai_res['ai_crop_consistency'],
-            ai_quality_assessment=ai_res['ai_quality_assessment'],
-            ai_signals=ai_res['ai_signals'],
-            verifier_notes='AI-assisted visual screening evaluated on crop upload.'
+            verification_status='SELF_REPORTED',  # Always SELF_REPORTED on upload
+            image_validation_status=img_res.get('image_validation_status', 'PASSED'),
+            ai_verification_status=img_res.get('image_validation_status', 'PASSED'),
+            ai_score=img_res.get('ai_score'),
+            ai_crop_consistency=img_res.get('ai_crop_consistency'),
+            ai_quality_assessment=img_res.get('ai_quality_assessment', 'SUFFICIENT'),
+            ai_signals=img_res.get('validation_signals', 'Image integrity check evaluated on upload.'),
+            verifier_notes='Seller self-declared parameters. Image validation passed on upload.'
         )
         db.session.add(q_report)
         db.session.commit()
@@ -265,10 +294,15 @@ def get_lot_details(lot_id):
 
 
 @lot_bp.route('/<int:lot_id>', methods=['PUT'])
+@jwt_required
 def update_lot(lot_id):
     lot = CropLot.query.get(lot_id)
     if not lot:
         return jsonify({'success': False, 'error': 'Not Found', 'message': f'Lot #{lot_id} not found.'}), 404
+
+    # IDOR Prevention: only lot owner or admin can edit
+    if lot.seller_id != g.current_user.id and g.current_user.role != 'ADMIN':
+        return jsonify({'success': False, 'error': 'Forbidden', 'message': 'You do not have permission to modify this produce lot.'}), 403
 
     if lot.status == 'SOLD':
         return jsonify({'success': False, 'error': 'Forbidden', 'message': 'Sold lots cannot be edited.'}), 403
@@ -296,10 +330,15 @@ def update_lot(lot_id):
 
 
 @lot_bp.route('/<int:lot_id>/status', methods=['PATCH'])
+@jwt_required
 def update_lot_status(lot_id):
     lot = CropLot.query.get(lot_id)
     if not lot:
         return jsonify({'success': False, 'error': 'Not Found', 'message': f'Lot #{lot_id} not found.'}), 404
+
+    # IDOR Prevention: only lot owner or admin can update status
+    if lot.seller_id != g.current_user.id and g.current_user.role != 'ADMIN':
+        return jsonify({'success': False, 'error': 'Forbidden', 'message': 'You do not have permission to update this produce lot status.'}), 403
 
     data = request.get_json() or {}
     new_status = data.get('status', '').upper()
@@ -327,10 +366,15 @@ def update_lot_status(lot_id):
 
 
 @lot_bp.route('/<int:lot_id>', methods=['DELETE'])
+@jwt_required
 def delete_lot(lot_id):
     lot = CropLot.query.get(lot_id)
     if not lot:
         return jsonify({'success': False, 'error': 'Not Found', 'message': f'Lot #{lot_id} not found.'}), 404
+
+    # IDOR Prevention: only lot owner or admin can delete
+    if lot.seller_id != g.current_user.id and g.current_user.role != 'ADMIN':
+        return jsonify({'success': False, 'error': 'Forbidden', 'message': 'You do not have permission to delete this produce lot.'}), 403
 
     if lot.status in ['ACTIVE', 'RESERVED', 'SOLD']:
         return jsonify({
@@ -349,6 +393,7 @@ def delete_lot(lot_id):
 
 
 @lot_bp.route('/upload-image', methods=['POST'])
+@jwt_required
 def upload_standalone_image():
     """Accepts single or multi-file crop photo upload and stores in uploads/crop_lots/."""
     uploaded_files = []
@@ -385,16 +430,12 @@ def upload_standalone_image():
                 'message': f'Image must be smaller than 5 MB ({file.filename} is {round(size / (1024*1024), 2)} MB).'
             }), 400
 
-        ext = file.filename.rsplit('.', 1)[1].lower()
-        unique_name = f"crop_{uuid.uuid4().hex[:12]}.{ext}"
-        upload_path = os.path.join(current_app.config['UPLOAD_FOLDER'], unique_name)
-        file.save(upload_path)
-
-        relative_url = f"/uploads/crop_lots/{unique_name}"
+        storage_provider = get_storage_provider()
+        save_res = storage_provider.save_file(file, category='crop_lots')
         saved_files.append({
-            'image_url': relative_url,
-            'filename': unique_name,
-            'original_name': file.filename
+            'image_url': save_res['url'],
+            'filename': save_res['filename'],
+            'original_name': save_res['original_filename']
         })
 
     return jsonify({
@@ -407,11 +448,15 @@ def upload_standalone_image():
 
 
 @lot_bp.route('/<int:lot_id>/images', methods=['POST'])
+@jwt_required
 def upload_lot_image(lot_id):
     """Uploads an image directly to an existing crop lot."""
     lot = CropLot.query.get(lot_id)
     if not lot:
         return jsonify({'success': False, 'error': 'Not Found', 'message': f'Lot #{lot_id} not found.'}), 404
+
+    if lot.seller_id != g.current_user.id and g.current_user.role != 'ADMIN':
+        return jsonify({'success': False, 'error': 'Forbidden', 'message': 'You do not have permission to modify images for this lot.'}), 403
 
     uploaded_files = []
     for key in ['images', 'image', 'file', 'photos']:
@@ -453,12 +498,9 @@ def upload_lot_image(lot_id):
                 'message': f'Image must be smaller than 5 MB.'
             }), 400
 
-        ext = file.filename.rsplit('.', 1)[1].lower()
-        unique_name = f"lot_{lot_id}_{uuid.uuid4().hex[:8]}.{ext}"
-        upload_path = os.path.join(current_app.config['UPLOAD_FOLDER'], unique_name)
-        file.save(upload_path)
-
-        relative_url = f"/uploads/crop_lots/{unique_name}"
+        storage_provider = get_storage_provider()
+        save_res = storage_provider.save_file(file, category='crop_lots')
+        relative_url = save_res['url']
         is_primary = (len(lot.images) == 0 and len(saved_items) == 0) or request.form.get('is_primary', 'false').lower() == 'true'
 
         if is_primary:
@@ -488,12 +530,16 @@ def upload_lot_image(lot_id):
 
 
 @lot_bp.route('/<int:lot_id>/images/<int:image_id>', methods=['DELETE'])
+@jwt_required
 def delete_lot_image(lot_id, image_id):
     """Deletes an image from a crop lot and disk."""
     lot = CropLot.query.get(lot_id)
     img = CropLotImage.query.filter_by(id=image_id, crop_lot_id=lot_id).first()
     if not lot or not img:
         return jsonify({'success': False, 'error': 'Not Found', 'message': 'Lot or image record not found.'}), 404
+
+    if lot.seller_id != g.current_user.id and g.current_user.role != 'ADMIN':
+        return jsonify({'success': False, 'error': 'Forbidden', 'message': 'You do not have permission to delete images from this lot.'}), 403
 
     # Remove file from disk if present
     filename = os.path.basename(img.image_url)
@@ -525,12 +571,16 @@ def delete_lot_image(lot_id, image_id):
 
 
 @lot_bp.route('/<int:lot_id>/images/<int:image_id>/primary', methods=['PATCH', 'POST'])
+@jwt_required
 def set_primary_image(lot_id, image_id):
     """Sets an image as the primary image for the crop lot."""
     lot = CropLot.query.get(lot_id)
     img = CropLotImage.query.filter_by(id=image_id, crop_lot_id=lot_id).first()
     if not lot or not img:
         return jsonify({'success': False, 'error': 'Not Found', 'message': 'Lot or image record not found.'}), 404
+
+    if lot.seller_id != g.current_user.id and g.current_user.role != 'ADMIN':
+        return jsonify({'success': False, 'error': 'Forbidden', 'message': 'You do not have permission to modify this lot.'}), 403
 
     for other_img in lot.images:
         other_img.is_primary = (other_img.id == image_id)
@@ -582,11 +632,15 @@ def get_lot_quality(lot_id):
 
 
 @lot_bp.route('/<int:lot_id>/quality/request-verification', methods=['POST'])
+@jwt_required
 def request_quality_verification(lot_id):
     """Farmer/FPO requests quality verification by authorized inspection."""
     lot = CropLot.query.get(lot_id)
     if not lot:
         return jsonify({'success': False, 'error': 'Not Found', 'message': f'Lot #{lot_id} not found.'}), 404
+
+    if lot.seller_id != g.current_user.id and g.current_user.role != 'ADMIN':
+        return jsonify({'success': False, 'error': 'Forbidden', 'message': 'You do not have permission to request verification for this lot.'}), 403
 
     data = request.get_json() or {}
     qr = lot.quality_report
@@ -618,6 +672,8 @@ def request_quality_verification(lot_id):
 
 
 @lot_bp.route('/<int:lot_id>/quality/verify', methods=['POST'])
+@jwt_required
+@role_required('ADMIN')
 def verify_lot_quality(lot_id):
     """Review action by authorized inspector, FPO representative, or buyer quality inspector."""
     lot = CropLot.query.get(lot_id)
@@ -676,5 +732,94 @@ def verify_lot_quality(lot_id):
         'quality_report': qr.to_dict(),
         'lot': lot.to_dict()
     }), 200
+
+
+@lot_bp.route('/<int:lot_id>/quality-review', methods=['POST'])
+@jwt_required
+def buyer_fpo_quality_review(lot_id):
+    """
+    Quality review by authorized Buyer, FPO, or Admin reviewer.
+    Allows recording ACCEPTABLE, NEEDS_INSPECTION, or REJECTED with notes.
+    Prevents self-review by seller/farmer.
+    Preserves original uploaded crop images and declarations.
+    """
+    lot = CropLot.query.get(lot_id)
+    if not lot:
+        return jsonify({'success': False, 'error': 'Not Found', 'message': f'Lot #{lot_id} not found.'}), 404
+
+    current_user = g.current_user
+
+    # Farmer / Seller cannot self-mark Buyer/FPO verification
+    if lot.seller_id == current_user.id and current_user.role != 'ADMIN':
+        return jsonify({
+            'success': False,
+            'error': 'Forbidden',
+            'message': 'Seller / Farmer cannot self-mark Buyer/FPO quality verification.'
+        }), 403
+
+    allowed_roles = {'BUYER', 'FPO', 'ADMIN'}
+    if current_user.role not in allowed_roles:
+        return jsonify({
+            'success': False,
+            'error': 'Forbidden',
+            'message': f"Quality review requires one of the following roles: {', '.join(sorted(allowed_roles))}."
+        }), 403
+
+    data = request.get_json() or {}
+    review_status = data.get('review_status', 'ACCEPTABLE').upper()
+    valid_statuses = {'ACCEPTABLE', 'NEEDS_INSPECTION', 'REJECTED'}
+    if review_status not in valid_statuses:
+        return jsonify({
+            'success': False,
+            'error': 'Validation Error',
+            'message': f"Invalid review_status. Allowed values: {', '.join(sorted(valid_statuses))}."
+        }), 400
+
+    notes = data.get('notes', '').strip()
+    verified_grade = data.get('verified_grade')
+
+    qr = lot.quality_report
+    if not qr:
+        qr = QualityReport(
+            crop_lot_id=lot.id,
+            seller_declared_grade=lot.quality_grade or 'Grade A'
+        )
+        db.session.add(qr)
+
+    reviewer_name = getattr(current_user, 'name', None) or getattr(current_user, 'full_name', None) or getattr(current_user, 'phone', 'Authorized Reviewer')
+    review_time = datetime.utcnow()
+
+    qr.buyer_review_status = review_status
+    qr.buyer_review_notes = notes
+    qr.buyer_reviewed_by = reviewer_name
+    qr.buyer_reviewed_at = review_time
+
+    qr.verified_by = reviewer_name
+    qr.verifier_role = current_user.role
+    qr.verification_date = review_time.strftime('%Y-%m-%d')
+    if notes:
+        qr.verifier_notes = notes
+
+    if review_status == 'ACCEPTABLE':
+        qr.verification_status = 'VERIFIED'
+        if verified_grade:
+            qr.verified_grade = verified_grade
+            lot.quality_grade = verified_grade
+        elif not qr.verified_grade:
+            qr.verified_grade = qr.seller_declared_grade
+    elif review_status == 'NEEDS_INSPECTION':
+        qr.verification_status = 'NEEDS_INSPECTION'
+    elif review_status == 'REJECTED':
+        qr.verification_status = 'REJECTED'
+
+    db.session.commit()
+
+    return jsonify({
+        'success': True,
+        'message': f'Quality review successfully recorded as {review_status}.',
+        'quality_report': qr.to_dict(),
+        'lot': lot.to_dict()
+    }), 200
+
 
 

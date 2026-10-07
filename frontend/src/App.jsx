@@ -11,30 +11,32 @@ import {
   Card,
   StatCard,
 } from './components/common';
-import LandingPage from './pages/LandingPage';
-import FarmerRegister from './pages/auth/FarmerRegister';
-import FPORegister from './pages/auth/FPORegister';
-import SellerLogin from './pages/auth/SellerLogin';
-import SellerDashboard from './pages/farmer/SellerDashboard';
-import ProfilePage from './pages/farmer/ProfilePage';
-import AddProducePage from './pages/farmer/AddProducePage';
-import MyProducePage from './pages/farmer/MyProducePage';
-import LotDetailPage from './pages/farmer/LotDetailPage';
-import MarketPricesPage from './pages/market/MarketPricesPage';
-import PricePredictionPage from './pages/market/PricePredictionPage';
-import SaleAdvisorPage from './pages/ai/SaleAdvisorPage';
-import StorageDiscoveryPage from './pages/farmer/StorageDiscoveryPage';
-import BuyerOffersPage from './pages/farmer/BuyerOffersPage';
-import FPOAggregationPage from './pages/fpo/FPOAggregationPage';
-import NotificationsPage from './pages/farmer/NotificationsPage';
-import TransactionsPage from './pages/farmer/TransactionsPage';
-import PaymentsEscrowPage from './pages/farmer/PaymentsEscrowPage';
-import GrievancesPage from './pages/farmer/GrievancesPage';
-import BuyerRegister from './pages/auth/BuyerRegister';
-import WarehouseRegister from './pages/auth/WarehouseRegister';
-import BuyerDashboard from './pages/buyer/BuyerDashboard';
-import WarehouseDashboard from './pages/warehouse/WarehouseDashboard';
-import AdminDashboard from './pages/admin/AdminDashboard';
+const LandingPage = React.lazy(() => import('./pages/LandingPage'));
+const FarmerRegister = React.lazy(() => import('./pages/auth/FarmerRegister'));
+const FPORegister = React.lazy(() => import('./pages/auth/FPORegister'));
+const SellerLogin = React.lazy(() => import('./pages/auth/SellerLogin'));
+const SellerDashboard = React.lazy(() => import('./pages/farmer/SellerDashboard'));
+const ProfilePage = React.lazy(() => import('./pages/farmer/ProfilePage'));
+const AddProducePage = React.lazy(() => import('./pages/farmer/AddProducePage'));
+const MyProducePage = React.lazy(() => import('./pages/farmer/MyProducePage'));
+const LotDetailPage = React.lazy(() => import('./pages/farmer/LotDetailPage'));
+const MarketPricesPage = React.lazy(() => import('./pages/market/MarketPricesPage'));
+const PricePredictionPage = React.lazy(() => import('./pages/market/PricePredictionPage'));
+const SaleAdvisorPage = React.lazy(() => import('./pages/ai/SaleAdvisorPage'));
+const StorageDiscoveryPage = React.lazy(() => import('./pages/farmer/StorageDiscoveryPage'));
+const BuyerOffersPage = React.lazy(() => import('./pages/farmer/BuyerOffersPage'));
+const FPOAggregationPage = React.lazy(() => import('./pages/fpo/FPOAggregationPage'));
+const NotificationsPage = React.lazy(() => import('./pages/farmer/NotificationsPage'));
+const TransactionsPage = React.lazy(() => import('./pages/farmer/TransactionsPage'));
+const PaymentsEscrowPage = React.lazy(() => import('./pages/farmer/PaymentsEscrowPage'));
+const GrievancesPage = React.lazy(() => import('./pages/farmer/GrievancesPage'));
+const BuyerRegister = React.lazy(() => import('./pages/auth/BuyerRegister'));
+const WarehouseRegister = React.lazy(() => import('./pages/auth/WarehouseRegister'));
+const BuyerDashboard = React.lazy(() => import('./pages/buyer/BuyerDashboard'));
+const WarehouseDashboard = React.lazy(() => import('./pages/warehouse/WarehouseDashboard'));
+const AdminDashboard = React.lazy(() => import('./pages/admin/AdminDashboard'));
+const LogisticsRegister = React.lazy(() => import('./pages/auth/LogisticsRegister'));
+const LogisticsDashboard = React.lazy(() => import('./pages/logistics/LogisticsDashboard'));
 import api from './services/api';
 import {
   ArrowLeft,
@@ -133,8 +135,60 @@ function App() {
   const [feedbackBanner, setFeedbackBanner] = useState(null);
 
   // Active authenticated user state
-  const [currentUser, setCurrentUser] = useState(null);
-  const [unreadNotifs, setUnreadNotifs] = useState(2);
+  const [currentUser, setCurrentUser] = useState(() => api.getUser());
+  const [unreadNotifs, setUnreadNotifs] = useState(0);
+
+  // Check stored JWT token and restore session on mount
+  useEffect(() => {
+    async function restoreSession() {
+      const token = api.getToken();
+      if (!token) return;
+
+      try {
+        const res = await api.get('/api/auth/me');
+        if (res && res.user) {
+          setCurrentUser(res.user);
+          api.setUser(res.user);
+          // Route to role portal if on landing or login
+          if (res.user.role === 'BUYER') {
+            setCurrentView('buyer-portal');
+          } else if (res.user.role === 'WAREHOUSE') {
+            setCurrentView('warehouse-portal');
+          } else if (res.user.role === 'ADMIN') {
+            setCurrentView('admin-portal');
+          } else {
+            setCurrentView('seller-portal');
+          }
+        }
+      } catch (err) {
+        console.warn('Session expired or invalid:', err);
+        api.clearToken();
+        api.clearUser();
+        setCurrentUser(null);
+      }
+    }
+
+    restoreSession();
+  }, []);
+
+  // Listen for unauthorized 401 events from api service
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      setCurrentUser(null);
+      api.clearToken();
+      api.clearUser();
+      setLoginInitialRole('FARMER');
+      setCurrentView('login');
+      setFeedbackBanner({
+        type: 'info',
+        title: 'Session Expired',
+        message: 'Your session has expired. Please log in again to continue.',
+      });
+    };
+
+    window.addEventListener('agrisaathi:unauthorized', handleUnauthorized);
+    return () => window.removeEventListener('agrisaathi:unauthorized', handleUnauthorized);
+  }, []);
 
   // Detect URL on initial load for deep linking / direct portal routes
   useEffect(() => {
@@ -144,30 +198,20 @@ function App() {
       const roleParam = (search.get('role') || '').toUpperCase();
 
       if (path.includes('/buyer') || roleParam === 'BUYER') {
-        if (path.includes('/dashboard') || path === '/buyer' || search.get('tab')) {
-          setCurrentUser({
-            id: 8,
-            role: 'BUYER',
-            name: 'Mahalaxmi Agro Wholesale & Retail Pvt. Ltd.',
-            phone: '9820011223',
-            verification_status: 'VERIFIED',
-            profile: {
-              company_name: 'Mahalaxmi Agro Wholesale & Retail Pvt. Ltd.',
-              gst_number: '27AAACM1234F1Z5',
-              district: 'Navi Mumbai',
-            }
-          });
-          setCurrentView('buyer-portal');
-        } else {
-          setLoginInitialRole('BUYER');
+        setLoginInitialRole('BUYER');
+        if (!api.getToken()) {
           setCurrentView('login');
         }
       } else if (path.includes('/warehouse') || roleParam === 'WAREHOUSE') {
         setLoginInitialRole('WAREHOUSE');
-        setCurrentView('login');
+        if (!api.getToken()) {
+          setCurrentView('login');
+        }
       } else if (path.includes('/admin') || roleParam === 'ADMIN') {
         setLoginInitialRole('ADMIN');
-        setCurrentView('login');
+        if (!api.getToken()) {
+          setCurrentView('login');
+        }
       } else if (path.includes('/login')) {
         if (roleParam) setLoginInitialRole(roleParam);
         setCurrentView('login');
@@ -207,9 +251,9 @@ function App() {
 
   useEffect(() => {
     async function loadNotificationsCount() {
+      if (!api.getToken()) return;
       try {
-        const userId = currentUser?.id || 1;
-        const res = await api.get(`/api/notifications?user_id=${userId}`);
+        const res = await api.get('/api/notifications');
         if (res && res.unread_count !== undefined) {
           setUnreadNotifs(res.unread_count);
         }
@@ -231,6 +275,8 @@ function App() {
         setCurrentView('register-buyer');
       } else if (role === 'WAREHOUSE') {
         setCurrentView('register-warehouse');
+      } else if (role === 'LOGISTICS') {
+        setCurrentView('register-logistics');
       }
     } else {
       setLoginInitialRole(role);
@@ -244,8 +290,10 @@ function App() {
   };
 
   // Handle registration success
-  const handleRegisterSuccess = (user, message) => {
+  const handleRegisterSuccess = (user, message, token) => {
     setCurrentUser(user);
+    if (user) api.setUser(user);
+    if (token) api.setToken(token);
     setActiveRoute('dashboard');
     setFeedbackBanner({
       type: 'success',
@@ -254,13 +302,16 @@ function App() {
     });
     if (user?.role === 'BUYER') setCurrentView('buyer-portal');
     else if (user?.role === 'WAREHOUSE') setCurrentView('warehouse-portal');
+    else if (user?.role === 'LOGISTICS') setCurrentView('logistics-portal');
     else if (user?.role === 'ADMIN') setCurrentView('admin-portal');
     else setCurrentView('seller-portal');
   };
 
   // Handle login success
-  const handleLoginSuccess = (user, message) => {
+  const handleLoginSuccess = (user, message, token) => {
     setCurrentUser(user);
+    if (user) api.setUser(user);
+    if (token) api.setToken(token);
     setActiveRoute('dashboard');
     setFeedbackBanner({
       type: 'info',
@@ -269,12 +320,18 @@ function App() {
     });
     if (user?.role === 'BUYER') setCurrentView('buyer-portal');
     else if (user?.role === 'WAREHOUSE') setCurrentView('warehouse-portal');
+    else if (user?.role === 'LOGISTICS') setCurrentView('logistics-portal');
     else if (user?.role === 'ADMIN') setCurrentView('admin-portal');
     else setCurrentView('seller-portal');
   };
 
   // Handle logout
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await api.post('/api/auth/logout');
+    } catch (e) {}
+    api.clearToken();
+    api.clearUser();
     setCurrentUser(null);
     setFeedbackBanner(null);
     setActiveRoute('dashboard');
@@ -350,7 +407,21 @@ function App() {
     );
   }
 
-  // 6. Render Login (supports all 5 roles)
+  // 6. Render Logistics Registration
+  if (currentView === 'register-logistics') {
+    return (
+      <LogisticsRegister
+        onBackToLanding={() => setCurrentView('landing')}
+        onRegisterSuccess={handleRegisterSuccess}
+        onSwitchToLogin={() => {
+          setLoginInitialRole('LOGISTICS');
+          setCurrentView('login');
+        }}
+      />
+    );
+  }
+
+  // 7. Render Login (supports all 6 roles)
   if (currentView === 'login') {
     return (
       <SellerLogin
@@ -362,12 +433,35 @@ function App() {
           else if (role === 'FPO') setCurrentView('register-fpo');
           else if (role === 'BUYER') setCurrentView('register-buyer');
           else if (role === 'WAREHOUSE') setCurrentView('register-warehouse');
+          else if (role === 'LOGISTICS') setCurrentView('register-logistics');
         }}
       />
     );
   }
 
-  // 7. Role-Specific Dedicated Portals
+  // 8. Role-Specific Dedicated Portals
+  if (currentView === 'logistics-portal' || (currentUser && currentUser.role === 'LOGISTICS')) {
+    const logUser = (currentUser && currentUser.role === 'LOGISTICS') ? currentUser : {
+      id: 10,
+      role: 'LOGISTICS',
+      name: 'MahaAgri Rural Express Logistics',
+      phone: '9820099887',
+      verification_status: 'VERIFIED',
+      profile: {
+        company_name: 'MahaAgri Rural Express Logistics',
+        contact_person: 'Vikram Shinde',
+        vehicle_count: 8,
+        service_districts: 'Nashik, Pune, Mumbai',
+      }
+    };
+    return (
+      <LogisticsDashboard
+        user={logUser}
+        onNavigate={handleNavigate}
+        onLogout={handleLogout}
+      />
+    );
+  }
   if (currentView === 'buyer-portal' || (currentUser && currentUser.role === 'BUYER')) {
     const buyerUser = (currentUser && currentUser.role === 'BUYER') ? currentUser : {
       id: 8,

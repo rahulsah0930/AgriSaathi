@@ -1,13 +1,17 @@
 from datetime import datetime, timedelta
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from models import db
 from models.lot import CropLot, FPOLotMember
 from models.user import User, FPOProfile
+from models.commodity import Commodity
+from models.notification import emit_idempotent_notification
 from services.fpo_aggregation_service import (
     get_smart_collection_duration,
     evaluate_aggregation_status,
     calculate_sell_urgency
 )
+from services.commodity_service import resolve_commodity_name
+from utils.auth import jwt_required, role_required
 
 fpo_bp = Blueprint('fpo', __name__, url_prefix='/api/fpo')
 
@@ -117,6 +121,8 @@ def get_fpo_lot_detail(lot_id):
 
 
 @fpo_bp.route('/lots', methods=['POST'])
+@jwt_required
+@role_required('FPO', 'ADMIN')
 def create_fpo_lot():
     data = request.get_json() or {}
 
@@ -125,15 +131,36 @@ def create_fpo_lot():
         if not data.get(req):
             return jsonify({'success': False, 'error': 'Validation Error', 'message': f"Field '{req}' is required."}), 400
 
-    seller_id = data.get('seller_id', 3) # Demo default FPO
-    user = User.query.get(seller_id)
-
-    fpo_name = user.fpo_profile.fpo_name if (user and user.fpo_profile) else 'Sahyadri Farmers Producer Co. Ltd.'
+    user = g.current_user
+    seller_id = user.id
+    fpo_name = user.fpo_profile.fpo_name if (user and user.fpo_profile and user.fpo_profile.fpo_name) else (user.name or 'FPO Cooperative')
 
     try:
-        target_qty = float(data.get('target_quantity', data.get('quantity', 2000.0)))
-        duration_hours = float(data.get('duration_hours', 10.0))
-        window_source = data.get('collection_window_source', 'MANUAL')
+        raw_target = data.get('target_quantity', data.get('quantity', 2000.0))
+        target_qty = float(raw_target)
+        if target_qty <= 0:
+            return jsonify({'success': False, 'error': 'Invalid Quantity', 'message': 'Target quantity must be greater than 0.'}), 400
+
+        crop_raw = data['crop'].strip()
+        canon = resolve_commodity_name(crop_raw)
+        clean_crop = canon or crop_raw
+        commodity = Commodity.query.filter_by(canonical_name=clean_crop).first()
+        commodity_id = commodity.id if commodity else None
+
+        # Determine collection duration: respect custom FPO input if provided; otherwise use Commodity default
+        duration_raw = data.get('duration_hours')
+        window_source = data.get('collection_window_source', 'SMART_SUGGESTED' if duration_raw is None else 'MANUAL')
+
+        if duration_raw is not None and str(duration_raw).strip() != '':
+            duration_hours = float(duration_raw)
+            if duration_hours <= 0:
+                return jsonify({'success': False, 'error': 'Invalid Duration', 'message': 'Collection window duration must be greater than 0.'}), 400
+            duration_hours = max(2.0, min(336.0, duration_hours))
+        else:
+            if commodity and commodity.default_collection_window_hours:
+                duration_hours = float(commodity.default_collection_window_hours)
+            else:
+                duration_hours = 24.0
 
         start_time = datetime.utcnow()
         deadline_time = start_time + timedelta(hours=duration_hours)
@@ -147,8 +174,9 @@ def create_fpo_lot():
             seller_type='FPO',
             seller_name=fpo_name,
             seller_verification_status=user.verification_status if user else 'VERIFIED',
-            crop=data['crop'].strip(),
-            variety=data.get('variety', 'Garwa / Aggregated').strip(),
+            crop=clean_crop,
+            commodity_id=commodity_id,
+            variety=data.get('variety', 'Standard').strip(),
             quantity=0.0, # Starts at 0 committed; grows as farmers contribute
             target_quantity=target_qty,
             unit=data.get('unit', 'kg'),
@@ -171,7 +199,7 @@ def create_fpo_lot():
 
         return jsonify({
             'success': True,
-            'message': f"FPO aggregation requirement for {target_qty} {new_lot.unit} {new_lot.crop} initiated. Collection window open for {duration_hours:g} hours.",
+            'message': f"FPO aggregation requirement for {target_qty:g} {new_lot.unit} {new_lot.crop} initiated. Collection window open for {duration_hours:g} hours.",
             'lot': new_lot.to_dict()
         }), 201
 
@@ -181,15 +209,16 @@ def create_fpo_lot():
 
 
 @fpo_bp.route('/lots/<int:lot_id>/members', methods=['POST'])
+@jwt_required
 def add_member_contribution(lot_id):
     lot = CropLot.query.get(lot_id)
-    if not lot:
+    if not lot or lot.seller_type != 'FPO':
         return jsonify({'success': False, 'error': 'Not Found', 'message': f'FPO Lot #{lot_id} not found.'}), 404
 
-    # 1. Authoritative Backend Deadline Check
+    # 1. Authoritative Backend Deadline Check & Status Sync
     evaluate_aggregation_status(lot, commit=False)
     now = datetime.utcnow()
-    if lot.collection_deadline_at and now > lot.collection_deadline_at:
+    if lot.collection_deadline_at and now >= lot.collection_deadline_at:
         return jsonify({
             'success': False,
             'error': 'Collection Expired',
@@ -204,19 +233,58 @@ def add_member_contribution(lot_id):
             'message': f'Aggregation requirement is {lot.aggregation_status}. New contributions cannot be accepted.'
         }), 400
 
+    user = g.current_user
     data = request.get_json() or {}
-    farmer_name = data.get('farmer_name', '').strip()
-    quantity = data.get('quantity')
 
-    if not farmer_name or quantity is None:
-        return jsonify({'success': False, 'error': 'Validation Error', 'message': 'Farmer name and quantity are required.'}), 400
+    # 3. Authentication, Role & Identity Verification
+    if user.role == 'FARMER':
+        # Never trust farmer_id or farmer_name from frontend request
+        farmer_id = user.id
+        farmer_name = (
+            user.farmer_profile.full_name
+            if (user.farmer_profile and user.farmer_profile.full_name)
+            else (user.name or 'Farmer')
+        )
+    elif user.role in ('FPO', 'ADMIN'):
+        # If FPO, must own this aggregation requirement (IDOR protection)
+        if user.role == 'FPO' and lot.seller_id != user.id:
+            return jsonify({
+                'success': False,
+                'error': 'Forbidden',
+                'message': 'You do not have permission to manage this FPO aggregation.'
+            }), 403
+
+        # FPO/Admin recording offline member contribution
+        farmer_name = data.get('farmer_name', '').strip()
+        farmer_id = data.get('farmer_id')
+        if not farmer_name:
+            return jsonify({
+                'success': False,
+                'error': 'Validation Error',
+                'message': 'Farmer name is required.'
+            }), 400
+    else:
+        return jsonify({
+            'success': False,
+            'error': 'Forbidden',
+            'message': 'Only Farmers or authorized FPOs can contribute to aggregation requirements.'
+        }), 403
+
+    # 4. Quantity Validation (must be numeric and strictly > 0)
+    quantity = data.get('quantity')
+    if quantity is None:
+        return jsonify({'success': False, 'error': 'Validation Error', 'message': 'Contribution quantity is required.'}), 400
 
     try:
         qty = float(quantity)
-        if qty <= 0:
-            return jsonify({'success': False, 'error': 'Invalid Quantity', 'message': 'Contribution must be greater than 0.'}), 400
+    except (ValueError, TypeError):
+        return jsonify({'success': False, 'error': 'Invalid Quantity', 'message': 'Contribution quantity must be a valid number.'}), 400
 
-        # 3. Backend Overbooking Prevention Check
+    if qty <= 0:
+        return jsonify({'success': False, 'error': 'Invalid Quantity', 'message': 'Contribution must be greater than 0.'}), 400
+
+    try:
+        # 5. Backend Overbooking / Overfill Prevention Check
         target_qty = lot.target_quantity if lot.target_quantity is not None else lot.quantity
         current_committed = sum(m.quantity for m in lot.members)
         remaining_capacity = max(0.0, round(target_qty - current_committed, 2))
@@ -225,15 +293,17 @@ def add_member_contribution(lot_id):
             return jsonify({
                 'success': False,
                 'error': 'Capacity Exceeded',
-                'message': f"Only {remaining_capacity:g} {lot.unit} capacity remains in this aggregation.",
+                'message': f"Only {remaining_capacity:g} {lot.unit} is still required.",
                 'remaining_capacity': remaining_capacity,
+                'remaining_quantity': remaining_capacity,
                 'target_quantity': target_qty,
                 'committed_quantity': current_committed
             }), 400
 
+        # 6. Record Member Contribution
         member = FPOLotMember(
             fpo_lot_id=lot.id,
-            farmer_id=data.get('farmer_id') or data.get('user_id'),
+            farmer_id=farmer_id,
             farmer_name=farmer_name,
             farmer_reference_placeholder=data.get('farmer_reference_placeholder', f'FARMER-MEM-{len(lot.members) + 1}'),
             crop=lot.crop,
@@ -244,15 +314,24 @@ def add_member_contribution(lot_id):
         )
 
         db.session.add(member)
-        if member not in lot.members:
-            lot.members.append(member)
+        lot.members.append(member)
         db.session.flush()
 
         # Recalibrate parent lot committed quantity
         lot.quantity = round(current_committed + qty, 2)
 
-        # Trigger authoritative milestone evaluation (90% CLOSING_SOON, 100% FILLED) with idempotent notification
+        # Trigger authoritative milestone evaluation (90% NEAR_CAPACITY, 100% FILLED) with idempotent notification
         evaluate_aggregation_status(lot, commit=False)
+
+        # Notify contributing farmer once
+        if farmer_id:
+            emit_idempotent_notification(
+                event_key=f"aggregation:{lot.id}:farmer_contrib:{member.id}",
+                recipient_user_id=farmer_id,
+                title="Contribution Confirmed",
+                message=f"Your contribution of {qty:g} {lot.unit} of {lot.crop} has been accepted for aggregation requirement #{lot.id}.",
+                notif_type='FARMER'
+            )
 
         db.session.commit()
 
@@ -261,6 +340,8 @@ def add_member_contribution(lot_id):
             'message': f"Added {qty:g} {lot.unit} contribution from {farmer_name}.",
             'member': member.to_dict(),
             'total_aggregated_quantity': lot.quantity,
+            'remaining_capacity': max(0.0, round(target_qty - lot.quantity, 2)),
+            'remaining_quantity': max(0.0, round(target_qty - lot.quantity, 2)),
             'aggregation_status': lot.aggregation_status,
             'lot': lot.to_dict()
         }), 201
@@ -271,6 +352,8 @@ def add_member_contribution(lot_id):
 
 
 @fpo_bp.route('/lots/<int:lot_id>/members/<int:member_id>/status', methods=['PUT'])
+@jwt_required
+@role_required('FPO', 'ADMIN')
 def update_member_status(lot_id, member_id):
     """FPO updates member contribution lifecycle: PLEDGED -> RECEIVED -> VERIFIED."""
     lot = CropLot.query.get(lot_id)
@@ -278,6 +361,9 @@ def update_member_status(lot_id, member_id):
 
     if not lot or not member:
         return jsonify({'success': False, 'error': 'Not Found', 'message': 'Lot or member record not found.'}), 404
+
+    if lot.seller_id != g.current_user.id and g.current_user.role != 'ADMIN':
+        return jsonify({'success': False, 'error': 'Forbidden', 'message': 'You do not have permission to manage this FPO aggregation.'}), 403
 
     data = request.get_json() or {}
     new_status = data.get('status') or data.get('contribution_status')
@@ -307,12 +393,17 @@ def update_member_status(lot_id, member_id):
 
 
 @fpo_bp.route('/lots/<int:lot_id>/members/<int:member_id>', methods=['DELETE'])
+@jwt_required
+@role_required('FPO', 'ADMIN')
 def remove_member_contribution(lot_id, member_id):
     lot = CropLot.query.get(lot_id)
     member = FPOLotMember.query.filter_by(id=member_id, fpo_lot_id=lot_id).first()
 
     if not lot or not member:
         return jsonify({'success': False, 'error': 'Not Found', 'message': 'Lot or member record not found.'}), 404
+
+    if lot.seller_id != g.current_user.id and g.current_user.role != 'ADMIN':
+        return jsonify({'success': False, 'error': 'Forbidden', 'message': 'You do not have permission to modify this FPO aggregation.'}), 403
 
     try:
         db.session.delete(member)
@@ -336,10 +427,15 @@ def remove_member_contribution(lot_id, member_id):
 
 
 @fpo_bp.route('/lots/<int:lot_id>/publish', methods=['POST'])
+@jwt_required
+@role_required('FPO', 'ADMIN')
 def publish_fpo_lot(lot_id):
     lot = CropLot.query.get(lot_id)
     if not lot:
         return jsonify({'success': False, 'error': 'Not Found', 'message': f'Lot #{lot_id} not found.'}), 404
+
+    if lot.seller_id != g.current_user.id and g.current_user.role != 'ADMIN':
+        return jsonify({'success': False, 'error': 'Forbidden', 'message': 'You do not have permission to publish this FPO aggregation.'}), 403
 
     if not lot.members or len(lot.members) == 0:
         return jsonify({
@@ -359,11 +455,16 @@ def publish_fpo_lot(lot_id):
 
 
 @fpo_bp.route('/lots/<int:lot_id>/extend', methods=['POST'])
+@jwt_required
+@role_required('FPO', 'ADMIN')
 def extend_aggregation_window(lot_id):
     """FPO extends collection window for an aggregation."""
     lot = CropLot.query.get(lot_id)
     if not lot or lot.seller_type != 'FPO':
         return jsonify({'success': False, 'error': 'Not Found', 'message': f'FPO Lot #{lot_id} not found.'}), 404
+
+    if lot.seller_id != g.current_user.id and g.current_user.role != 'ADMIN':
+        return jsonify({'success': False, 'error': 'Forbidden', 'message': 'You do not have permission to extend this FPO aggregation window.'}), 403
 
     data = request.get_json() or {}
     extension_hours = float(data.get('extension_hours', 10.0))
@@ -395,11 +496,16 @@ def extend_aggregation_window(lot_id):
 
 
 @fpo_bp.route('/lots/<int:lot_id>/proceed', methods=['POST'])
+@jwt_required
+@role_required('FPO', 'ADMIN')
 def proceed_with_collected_quantity(lot_id):
     """FPO finalizes aggregation with existing collected quantity and closes pool for new pledges."""
     lot = CropLot.query.get(lot_id)
     if not lot or lot.seller_type != 'FPO':
         return jsonify({'success': False, 'error': 'Not Found', 'message': f'FPO Lot #{lot_id} not found.'}), 404
+
+    if lot.seller_id != g.current_user.id and g.current_user.role != 'ADMIN':
+        return jsonify({'success': False, 'error': 'Forbidden', 'message': 'You do not have permission to finalize this FPO aggregation.'}), 403
 
     try:
         lot.aggregation_status = 'CLOSED'
@@ -418,11 +524,16 @@ def proceed_with_collected_quantity(lot_id):
 
 
 @fpo_bp.route('/lots/<int:lot_id>/cancel', methods=['POST'])
+@jwt_required
+@role_required('FPO', 'ADMIN')
 def cancel_aggregation(lot_id):
     """FPO cancels an aggregation while preserving historical records."""
     lot = CropLot.query.get(lot_id)
     if not lot or lot.seller_type != 'FPO':
         return jsonify({'success': False, 'error': 'Not Found', 'message': f'FPO Lot #{lot_id} not found.'}), 404
+
+    if lot.seller_id != g.current_user.id and g.current_user.role != 'ADMIN':
+        return jsonify({'success': False, 'error': 'Forbidden', 'message': 'You do not have permission to cancel this FPO aggregation.'}), 403
 
     try:
         lot.aggregation_status = 'CANCELLED'
@@ -478,7 +589,7 @@ def get_fpo_inventory():
         group['received_quantity'] += d['received_quantity']
         group['verified_quantity'] += d['verified_quantity']
         group['available_for_sale'] += d['available_for_sale']
-        if lot.aggregation_status in ('OPEN', 'CLOSING_SOON'):
+        if lot.aggregation_status in ('OPEN', 'CLOSING_SOON', 'NEAR_CAPACITY'):
             group['active_pools_count'] += 1
 
         # Traceability details for each lot batch
@@ -725,10 +836,11 @@ def register_fpo_organization():
 
 
 @fpo_bp.route('/direct-lot', methods=['POST'])
+@jwt_required
+@role_required('FPO', 'ADMIN')
 def create_direct_fpo_lot():
     """Allows an FPO to directly list and sell aggregated produce from offline farmer groups on the marketplace."""
     data = request.get_json() or {}
-    seller_id = data.get('seller_id')
     crop = data.get('crop')
     quantity = data.get('quantity')
     expected_price = data.get('expected_price')
@@ -744,14 +856,14 @@ def create_direct_fpo_lot():
     except ValueError:
         return jsonify({'success': False, 'message': 'Quantity and price must be numbers.'}), 400
 
-    user = User.query.get(seller_id) if seller_id else None
-    seller_name = (user.name or (user.fpo_profile.fpo_name if user.fpo_profile else None)) if user else (data.get('fpo_name') or 'FPO Producer Co.')
+    user = g.current_user
+    seller_name = user.name or (user.fpo_profile.fpo_name if user.fpo_profile else 'FPO Producer Co.')
 
     lot = CropLot(
-        seller_id=user.id if user else 3,
+        seller_id=user.id,
         seller_type='FPO',
         seller_name=seller_name,
-        seller_verification_status=user.verification_status if user else 'PENDING',
+        seller_verification_status=user.verification_status,
         crop=crop,
         variety=data.get('variety', 'Commercial Bulk'),
         quantity=qty,
@@ -850,18 +962,20 @@ def get_fpo_benchmarks():
 
 
 @fpo_bp.route('/join-request', methods=['POST'])
+@jwt_required
 def submit_join_request():
     """Allows an individual farmer to apply for membership in an FPO."""
     data = request.get_json() or {}
-    farmer_name = data.get('farmer_name', 'Suresh Patil')
+    user = g.current_user
+    farmer_name = user.farmer_profile.full_name if (user.farmer_profile and user.farmer_profile.full_name) else (user.name or 'Farmer')
     fpo_name = data.get('fpo_name', 'Sahyadri Farmers Producer Co. Ltd.')
-    phone = data.get('phone', '9823012345')
+    phone = user.phone
     crop = data.get('crop', 'Tomato')
     district = data.get('district', 'Nashik')
     land_acres = data.get('land_acres', 3.5)
 
     from models.notification import Notification
-    user_id = data.get('user_id', 1)
+    user_id = user.id
     db.session.add(Notification(
         user_id=user_id,
         title=f'Membership Request Sent: {fpo_name}',

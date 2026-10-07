@@ -32,7 +32,7 @@ class Grievance(db.Model):
     location_lng = db.Column(db.Float, nullable=True)
 
     status = db.Column(
-        db.Enum('OPEN', 'UNDER_INVESTIGATION', 'RESOLVED', 'DISMISSED', name='grievance_statuses'),
+        db.Enum('OPEN', 'UNDER_REVIEW', 'UNDER_INVESTIGATION', 'RESOLVED', 'REJECTED', 'DISMISSED', name='grievance_statuses'),
         default='OPEN'
     )
     resolution_notes = db.Column(db.Text, nullable=True)

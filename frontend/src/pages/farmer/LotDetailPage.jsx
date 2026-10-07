@@ -729,7 +729,7 @@ export const LotDetailPage = ({ lotId, user, onNavigate }) => {
                 }}
               >
                 <Sparkles size={20} />
-                AI Sale Recommendation
+                Prototype Sale Advisor Recommendation
               </h3>
               <Badge variant={aiRec.recommendation === 'SELL SOON' ? 'danger' : 'warning'}>
                 {aiRec.recommendation}
@@ -878,7 +878,7 @@ export const LotDetailPage = ({ lotId, user, onNavigate }) => {
                 borderLeft: `3px solid ${riskStyle.border}`,
               }}
             >
-              <strong>AI Analysis:</strong> {aiRec.reason}
+              <strong>Decision Support Reasoning:</strong> {aiRec.reason}
             </div>
           </div>
         )}

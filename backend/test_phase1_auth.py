@@ -1,7 +1,7 @@
 import sys
 import os
 
-sys.path.insert(0, r"c:\Users\mrswa\OneDrive\Desktop\AgriSaathi2\AgriSaathi\backend")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from app import app
 from models import db, User
 
@@ -20,7 +20,7 @@ assert res.status_code == 200
 res = client.get("/api/auth/demo-accounts")
 data = res.get_json()
 print(f"2. Demo accounts: Status {res.status_code} | {len(data.get('demo_accounts', []))} roles available")
-assert len(data.get("demo_accounts", [])) == 5
+assert len(data.get("demo_accounts", [])) >= 5
 
 # 3. Login as Farmer (Suresh Patil)
 res = client.post("/api/auth/login", json={"identifier": "9823012345", "password": "password123"})
@@ -54,10 +54,11 @@ assert res.status_code == 200 and user_data.get("role") == "ADMIN"
 
 # 8. Register new Farmer test
 test_phone = "9823099111"
-existing = User.query.filter_by(phone=test_phone).first()
-if existing:
-    db.session.delete(existing)
-    db.session.commit()
+with app.app_context():
+    existing = User.query.filter_by(phone=test_phone).first()
+    if existing:
+        db.session.delete(existing)
+        db.session.commit()
 
 farmer_payload = {
     "full_name": "Test Ganpatrao Shinde",

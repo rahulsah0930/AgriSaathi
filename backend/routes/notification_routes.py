@@ -1,13 +1,15 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from models import db
 from models.notification import Notification
+from utils.auth import jwt_required, role_required
 
 notification_bp = Blueprint('notifications', __name__, url_prefix='/api/notifications')
 
 @notification_bp.route('', methods=['GET'])
+@jwt_required
 def get_notifications():
-    """Retrieve in-app notifications for the active user with optional unread filter."""
-    user_id = request.args.get('user_id', 1, type=int)
+    """Retrieve in-app notifications strictly for the authenticated user."""
+    user_id = g.current_user.id
     type_filter = request.args.get('type')
     unread_only = request.args.get('unread_only', 'false').lower() == 'true'
 
@@ -31,11 +33,15 @@ def get_notifications():
 
 
 @notification_bp.route('/<int:notification_id>/read', methods=['PATCH', 'POST'])
+@jwt_required
 def mark_as_read(notification_id):
     """Mark an individual notification as read."""
     notification = Notification.query.get(notification_id)
     if not notification:
         return jsonify({'success': False, 'error': 'Notification not found'}), 404
+
+    if notification.user_id != g.current_user.id and g.current_user.role != 'ADMIN':
+        return jsonify({'success': False, 'error': 'Forbidden', 'message': 'You are not authorized to modify this notification.'}), 403
 
     notification.is_read = True
     db.session.commit()
@@ -48,12 +54,10 @@ def mark_as_read(notification_id):
 
 
 @notification_bp.route('/mark-all-read', methods=['POST', 'PATCH'])
+@jwt_required
 def mark_all_read():
-    """Mark all notifications as read for a given user."""
-    data = request.get_json() or {}
-    user_id = data.get('user_id') or request.args.get('user_id', 1, type=int)
-
-    Notification.query.filter_by(user_id=user_id, is_read=False).update({'is_read': True})
+    """Mark all notifications as read for the authenticated user."""
+    Notification.query.filter_by(user_id=g.current_user.id, is_read=False).update({'is_read': True})
     db.session.commit()
 
     return jsonify({
@@ -63,10 +67,12 @@ def mark_all_read():
 
 
 @notification_bp.route('', methods=['POST'])
+@jwt_required
+@role_required('ADMIN')
 def create_notification():
-    """Create a new notification (simulation or system alert)."""
+    """Create a new notification (administrative announcements or alerts)."""
     data = request.get_json() or {}
-    user_id = data.get('user_id', 1)
+    target_user_id = data.get('user_id') or g.current_user.id
     title = data.get('title')
     message = data.get('message')
     notif_type = data.get('type', 'INFO')
@@ -75,7 +81,7 @@ def create_notification():
         return jsonify({'success': False, 'error': 'Title and message are required.'}), 400
 
     notif = Notification(
-        user_id=user_id,
+        user_id=target_user_id,
         title=title,
         message=message,
         type=notif_type,
@@ -89,3 +95,4 @@ def create_notification():
         'message': 'Notification created successfully.',
         'notification': notif.to_dict()
     }), 201
+

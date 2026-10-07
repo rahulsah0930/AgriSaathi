@@ -129,6 +129,22 @@ export const LandingPage = ({ onSelectRole, onGoToLogin }) => {
       },
     },
     {
+      role: 'LOGISTICS',
+      title: 'Transporter & Logistics Fleet',
+      desc: 'Connect with farm-to-hub transport orders, schedule vehicle pickups, update live transit milestones, and submit proof of delivery.',
+      actionText: 'Register Fleet',
+      loginText: 'Transporter Login',
+      badge: 'Fulfillment',
+      onAction: () => {
+        setIsRegisterModalOpen(false);
+        onSelectRole('LOGISTICS', 'register');
+      },
+      onLogin: () => {
+        setIsLoginModalOpen(false);
+        onGoToLogin('LOGISTICS');
+      },
+    },
+    {
       role: 'ADMIN',
       title: 'Government Regulatory Admin',
       desc: 'Review pending registrations, inspect trade escrow ledgers, adjudicate dispute grievances, and enforce compliance.',

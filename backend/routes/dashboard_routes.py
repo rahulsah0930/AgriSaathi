@@ -1,20 +1,23 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, g
 from models import db
 from models.user import User
 from models.lot import CropLot
 from models.offer import Offer
 from models.notification import Notification
+from utils.auth import jwt_optional
 
 dashboard_bp = Blueprint('dashboard', __name__, url_prefix='/api/dashboard')
 
 @dashboard_bp.route('/summary', methods=['GET'])
+@jwt_optional
 def get_dashboard_summary():
-    role = request.args.get('role', 'FARMER').upper()
-    user_id_param = request.args.get('user_id')
-
-    user_id = None
-    if user_id_param is not None and str(user_id_param).strip().isdigit():
-        user_id = int(str(user_id_param).strip())
+    user = getattr(g, 'current_user', None)
+    if user:
+        role = user.role
+        user_id = user.id
+    else:
+        role = request.args.get('role', 'FARMER').upper()
+        user_id = None
 
     # Market Price Summary for Maharashtra APMCs
     market_summary = [

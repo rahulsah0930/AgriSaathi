@@ -534,3 +534,76 @@ To maintain technical transparency, this section distinguishes between what is f
 - **Logistics & Transport**: Integration with ULIP (Unified Logistics Interface Platform) and VAHAN/SARATHI national transport registries for verified vehicle GPS tracking.
 - **Identity & Land Verification**: Direct API connectivity with UIDAI Aadhaar e-KYC, Mahabhulekh (e-Ferfar / 7/12 Land Records), and Digilocker.
 - **Physical Assaying**: Interfacing with NABL-accredited testing laboratories and portable spectroscopic rapid-assay scanners for certified AGMARK grade issuance.
+
+---
+
+## 30. Production Architecture & Deployment (Phase 9)
+
+### 30.1 Deployment Architecture
+AgriSaathi is architected for zero-downtime, cloud-native prototype deployment:
+- **Frontend Client**: Hosted on **Vercel** with Vite 8 + React 19, code-split into lightweight route chunks (< 100 kB initial bundle) and SPA rewrite handling.
+- **Backend API**: Hosted on **Render** as a Python 3.12 Web Service driven by **Gunicorn** WSGI (`gunicorn -b 0.0.0.0:$PORT app:app`).
+- **Production Database**: Hosted **PostgreSQL** (compatible with Render PostgreSQL or Neon) utilizing connection pooling, `SELECT ... FOR UPDATE` row concurrency locks, and Alembic database migrations.
+- **Object Storage**: **Cloudinary** cloud object storage (`STORAGE_PROVIDER=cloudinary`) for persistent image storage of crop lot listings, logistics Proof of Delivery (POD) bills, and reference commodity photos.
+
+### 30.2 Production URLs (To be populated upon live deployment)
+- **Frontend Web Portal**: Configured via Vercel (`https://<project-name>.vercel.app`)
+- **Backend API**: Configured via Render (`https://<service-name>.onrender.com`)
+
+### 30.3 Local Development vs. Production Environments
+
+| Component | Local Development Mode | Production Deployment Mode |
+| :--- | :--- | :--- |
+| **Database** | SQLite (`backend/agrisaathi_dev.db`) | Hosted PostgreSQL (`DATABASE_URL`) |
+| **Web Server** | Flask Development Server (`python app.py`) | Gunicorn WSGI (`gunicorn app:app`) |
+| **Object Storage** | Local filesystem (`backend/uploads/`) | Cloudinary Object Storage |
+| **Demo Mode** | Enabled (`DEMO_MODE=true`) for quick testing | Configurable (`false` for public, `true` for SIH judging) |
+| **CORS Policy** | Localhost ports (`5173`, `3000`) | Strict origin matching against `FRONTEND_URL` |
+| **Secrets** | Local development default fallback | Cryptographically strong 64-hex generated secrets |
+
+### 30.4 Required Environment Variable Names (Never commit values)
+
+#### Backend (Render Environment Settings)
+- `APP_ENV`: `production`
+- `DATABASE_URL`: Hosted PostgreSQL connection URI (e.g., `postgresql://...`)
+- `SECRET_KEY`: Cryptographically secure secret key
+- `JWT_SECRET_KEY`: Cryptographically secure JWT signing key
+- `FRONTEND_URL`: Allowed frontend origin(s), e.g., `https://<your-frontend>.vercel.app`
+- `DEMO_MODE`: `false` (or `true` if demonstration accounts are required for SIH evaluators)
+- `STORAGE_PROVIDER`: `cloudinary`
+- `CLOUDINARY_CLOUD_NAME`: Cloudinary account cloud name
+- `CLOUDINARY_API_KEY`: Cloudinary API key
+- `CLOUDINARY_API_SECRET`: Cloudinary API secret
+- `PYTHON_VERSION`: `3.12.10`
+
+#### Frontend (Vercel Environment Settings)
+- `VITE_API_URL`: Render backend URL, e.g., `https://<your-backend>.onrender.com`
+
+### 30.5 Database Migration Execution
+Production database schemas are managed through Flask-Migrate / Alembic. When deploying against a new PostgreSQL database:
+```bash
+# Apply all schema migrations to PostgreSQL
+flask db upgrade
+```
+The application context automatically executes reference commodity catalog initialization idempotently upon startup.
+
+### 30.6 Two-Stage Deployment Sequence (CORS Resolution)
+1. **Deploy Backend Service on Render**:
+   - Create Render Web Service linked to the repository.
+   - Set Build Command: `pip install -r requirements.txt && flask db upgrade`
+   - Set Start Command: `gunicorn -b 0.0.0.0:$PORT app:app`
+   - Configure `APP_ENV=production`, `DATABASE_URL`, `STORAGE_PROVIDER=cloudinary`, Cloudinary credentials, and secure keys.
+   - Record the assigned Render backend URL (e.g., `https://agrisaathi-backend.onrender.com`).
+2. **Deploy Frontend on Vercel**:
+   - Create Vercel project linking to the repository root directory `frontend/`.
+   - Set Environment Variable: `VITE_API_URL=https://agrisaathi-backend.onrender.com`.
+   - Run Vercel build (`npm run build`).
+   - Record the final assigned Vercel URL (e.g., `https://agrisaathi-app.vercel.app`).
+3. **Lock Down Backend CORS**:
+   - In Render Dashboard, set `FRONTEND_URL=https://agrisaathi-app.vercel.app`.
+   - Redeploy/restart the backend service to restrict CORS to the exact Vercel frontend domain.
+4. **Run Live Cloud Asset Migration**:
+   - Execute one-time asset migration to populate Cloudinary with reference commodity imagery:
+     ```bash
+     python utils/migrate_assets_to_cloud.py
+     ```

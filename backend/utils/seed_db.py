@@ -1,5 +1,5 @@
 from models import db
-from models.user import User, FarmerProfile, FPOProfile, BuyerProfile, WarehouseProfile
+from models.user import User, FarmerProfile, FPOProfile, BuyerProfile, WarehouseProfile, LogisticsProfile
 from models.lot import CropLot, CropLotImage, QualityReport, FPOLotMember
 from models.market import MarketPrice
 from models.storage import Warehouse, StorageBooking
@@ -241,8 +241,42 @@ def seed_demo_accounts():
         admin1.verification_status = 'VERIFIED'
         admin1.set_password('admin123')
 
+    # 8. Logistics Provider (MahaAgri Rural Express Logistics)
+    logistics1 = User.query.filter_by(phone='9820099887').first()
+    if not logistics1:
+        logistics1 = User(
+            name='MahaAgri Rural Express Logistics',
+            phone='9820099887',
+            email='logistics@agrisaathi.demo',
+            role='LOGISTICS',
+            verification_status='VERIFIED',
+            verification_notes='Verified Commercial Fleet Provider registered under MahaAgri Logistics Network.'
+        )
+        logistics1.set_password('logistics123')
+        db.session.add(logistics1)
+        db.session.flush()
+
+        logp1 = LogisticsProfile(
+            user_id=logistics1.id,
+            company_name='MahaAgri Rural Express Logistics',
+            contact_person='Vikram Shinde',
+            phone='9820099887',
+            email='logistics@agrisaathi.demo',
+            vehicle_types='MINI_TRUCK,PICKUP,LCV,TRUCK,REFRIGERATED_VEHICLE',
+            vehicle_count=8,
+            service_districts='Nashik, Pune, Mumbai, Ahmednagar, Solapur',
+            availability_status='AVAILABLE',
+            license_number_masked='MH-RTO-2024-LOG-9182',
+            aadhaar_masked='XXXX XXXX 7712'
+        )
+        db.session.add(logp1)
+    else:
+        logistics1.name = 'MahaAgri Rural Express Logistics'
+        logistics1.verification_status = 'VERIFIED'
+        logistics1.set_password('logistics123')
+
     db.session.commit()
-    print("[AgriSaathi] Successfully verified demo accounts for all 5 roles.")
+    print("[AgriSaathi] Successfully verified demo accounts for all roles (including LOGISTICS).")
 
     # Seed related domain data
     _seed_demo_lots(farmer1.id, fpo1.id)

@@ -19,7 +19,6 @@ CROP_ELASTICITY = {
 }
 
 # Seasonal monthly demand factors for Maharashtra
-# Values > 1.0 indicate festival or post-monsoon peak demand
 SEASONAL_FACTORS = {
     'Tomato': 1.08,
     'Onion': 1.15,        # Post-monsoon festive demand surge
@@ -30,26 +29,49 @@ SEASONAL_FACTORS = {
     'Banana': 1.05
 }
 
+STANDARD_DISCLAIMER = (
+    "Prototype market estimate. Agricultural prices are affected by weather, arrivals, "
+    "demand, policy, quality and other factors. This is not a guaranteed sale price."
+)
+
 def predict_crop_price(crop='Tomato', market_name='Pimpalgaon APMC', district='Nashik', horizon_days=7):
     """
-    Predicts future mandi prices using scikit-learn Ridge Regression combined
-    with arrival volume elasticity and seasonal momentum adjustments.
+    Transparent & Defensible Mandi Price Prediction Engine.
+    - Uses Ridge Regression on chronological historical data when sufficient observations exist (>= 7).
+    - Uses chronological train/validation split (older -> train, newer -> validation).
+    - Never fabricates or artificially bounds R² or MAE metrics.
+    - When data is insufficient (< 7 observations), falls back to RULE_BASED_FALLBACK and
+      clearly marks metrics as 'Insufficient validation data'.
+    - If synthetic demo history is used, sets prediction_type to 'SYNTHETIC_DEMO'.
+    - Confidence level (HIGH / MEDIUM / LOW) is computed deterministically based on
+      sample count, recency, and validation error.
     """
+    try:
+        from services.commodity_service import resolve_commodity_name
+        resolved = resolve_commodity_name(crop)
+        if resolved:
+            crop = resolved.canonical_name
+    except Exception:
+        pass
+
     today = date.today()
 
-    # 1. Fetch recent historical prices for this crop & mandi
+    # 1. Fetch historical observations for this crop & mandi (chronological order)
     history_records = MarketPrice.query.filter(
         MarketPrice.crop.ilike(f'%{crop}%'),
         MarketPrice.market_name.ilike(f'%{market_name}%')
     ).order_by(MarketPrice.price_date.asc()).all()
 
-    # If insufficient history in DB for that specific mandi, fetch from district or fallback
-    if len(history_records) < 5:
-        history_records = MarketPrice.query.filter(
+    # Fallback to crop across other mandis in state if specific mandi has few records
+    used_broader_market = False
+    if len(history_records) < 7:
+        broader_records = MarketPrice.query.filter(
             MarketPrice.crop.ilike(f'%{crop}%')
-        ).order_by(MarketPrice.price_date.asc()).limit(14).all()
+        ).order_by(MarketPrice.price_date.asc()).all()
+        if len(broader_records) >= 7:
+            history_records = broader_records
+            used_broader_market = True
 
-    # Default fallback baseline prices if completely empty
     base_defaults = {
         'Tomato': 22.5,
         'Onion': 26.5,
@@ -61,70 +83,118 @@ def predict_crop_price(crop='Tomato', market_name='Pimpalgaon APMC', district='N
     }
     current_spot = base_defaults.get(crop, 25.0)
 
-    # 2. Extract series for model training
-    if history_records:
+    # 2. Determine Data Source & Prediction Architecture
+    total_observations = len(history_records)
+    actual_mae = None
+    actual_r2 = None
+    metrics_status = "Insufficient validation data"
+    train_count = 0
+    val_count = 0
+    date_range_str = None
+
+    if total_observations >= 7:
+        # Check source type of underlying records
+        has_synthetic = any(getattr(r, 'source_type', '') == 'SYNTHETIC' for r in history_records)
+        has_sample = any(getattr(r, 'source_type', '') == 'SAMPLE' for r in history_records)
+
+        if has_synthetic:
+            source_type = 'SYNTHETIC'
+            data_source_label = 'Synthetic Demonstration History'
+            prediction_type = 'SYNTHETIC_DEMO'
+        elif has_sample:
+            source_type = 'SAMPLE'
+            data_source_label = 'Sample Demonstration Data'
+            prediction_type = 'MODEL_BASED'
+        else:
+            source_type = 'HISTORICAL'
+            data_source_label = 'Historical APMC Market Records'
+            prediction_type = 'MODEL_BASED'
+
         prices = [r.average_price for r in history_records]
         arrivals = [r.arrival_volume for r in history_records]
-        current_spot = prices[-1]
+        current_spot = round(prices[-1], 2)
+        start_date = history_records[0].price_date
+        end_date = history_records[-1].price_date
+        date_range_str = f"{start_date} to {end_date}"
+
+        # Build feature matrix: [day_index, arrival_volume, 3_day_moving_avg]
+        X = []
+        y = []
+        for i in range(2, total_observations):
+            day_idx = i
+            arr = arrivals[i] if i < len(arrivals) else 1500
+            ma3 = float(np.mean(prices[i-2:i+1]))
+            X.append([day_idx, arr, ma3])
+            y.append(prices[i])
+
+        X = np.array(X)
+        y = np.array(y)
+
+        # Chronological Train / Validation Split (older 75% -> train, newer 25% -> validation)
+        split_idx = max(int(len(X) * 0.75), 3)
+        X_train, X_val = X[:split_idx], X[split_idx:]
+        y_train, y_val = y[:split_idx], y[split_idx:]
+
+        train_count = len(X_train)
+        val_count = len(X_val)
+
+        model = Ridge(alpha=1.0)
+        model.fit(X_train, y_train)
+
+        if len(y_val) >= 1:
+            y_val_pred = model.predict(X_val)
+            actual_mae = round(float(mean_absolute_error(y_val, y_val_pred)), 2)
+            if len(y_val) >= 2 and np.var(y_val) > 1e-6:
+                # Raw un-clamped R²
+                actual_r2 = round(float(r2_score(y_val, y_val_pred)), 3)
+            else:
+                actual_r2 = None
+            metrics_status = "Calculated on chronological validation split"
+        else:
+            # Not enough validation holdout points
+            actual_mae = None
+            actual_r2 = None
+            metrics_status = "Insufficient validation holdout samples"
+
+    elif total_observations > 0:
+        # 1 to 6 records: Insufficient for ML train/validation split
+        source_type = getattr(history_records[0], 'source_type', None) or 'HISTORICAL'
+        data_source_label = 'Historical APMC Market Records (Sparse)'
+        prediction_type = 'RULE_BASED_FALLBACK'
+        prices = [r.average_price for r in history_records]
+        current_spot = round(prices[-1], 2)
+        date_range_str = f"{history_records[0].price_date} to {history_records[-1].price_date}"
+        metrics_status = "Insufficient validation data (minimum 7 historical records required for ML train/validation split)"
+
     else:
-        # Generate synthetic 14-day history for training
-        prices = [round(current_spot + (np.sin(i) * 1.8), 2) for i in range(14)]
-        arrivals = [round(1500 + (np.cos(i) * 300), 1) for i in range(14)]
+        # Zero records: Pure synthetic fallback
+        source_type = 'SYNTHETIC'
+        data_source_label = 'Synthetic Demonstration Fallback'
+        prediction_type = 'SYNTHETIC_DEMO'
+        prices = [current_spot]
+        metrics_status = "Insufficient validation data (no market records in database)"
 
-    n_samples = len(prices)
-    X = []
-    y = []
-
-    # Features: [day_index, arrival_volume, 3_day_moving_avg]
-    for i in range(2, n_samples):
-        day_idx = i
-        arrival = arrivals[i] if i < len(arrivals) else 1500
-        ma3 = np.mean(prices[i-2:i+1])
-        X.append([day_idx, arrival, ma3])
-        y.append(prices[i])
-
-    X = np.array(X)
-    y = np.array(y)
-
-    # 3. Train ML Model
-    model = Ridge(alpha=1.0)
-    if len(X) >= 3:
-        model.fit(X, y)
-        y_pred_train = model.predict(X)
-        r2 = round(float(r2_score(y, y_pred_train)), 2)
-        mae = round(float(mean_absolute_error(y, y_pred_train)), 2)
-    else:
-        r2 = 0.88
-        mae = 1.15
-
-    # Ensure r2 is bounded nicely for display
-    r2_display = max(min(r2, 0.94), 0.82)
-    mae_display = max(min(mae, 2.40), 0.85)
-
-    # 4. Generate future projections
-    future_points = []
+    # 3. Deterministic Future Projections
     elasticity = CROP_ELASTICITY.get(crop, -0.20)
     seasonality = SEASONAL_FACTORS.get(crop, 1.05)
+    last_price = current_spot
 
-    last_price = prices[-1]
-    last_arrival = arrivals[-1] if arrivals else 1500
+    # Uncertainty factor based on MAE if available, otherwise 5% of spot price
+    base_uncertainty = actual_mae if actual_mae is not None else round(current_spot * 0.05, 2)
 
+    future_points = []
     for step in range(1, horizon_days + 1):
         target_date = today + timedelta(days=step)
         
-        # Trend projection with slight upward momentum modulated by elasticity
-        daily_drift = (0.28 * (seasonality - 1.0) * 10) + (elasticity * 0.05)
-        # Random noise bounded
-        noise = (step * 0.12)
-        
-        est_price = round(last_price + (daily_drift * step) + (np.sin(step / 2.0) * 0.4), 2)
-        # Ensure price does not crash to zero or negative
+        # Predictable economic trend: seasonal drift + arrival elasticity effect
+        daily_drift = (0.25 * (seasonality - 1.0) * 10) + (elasticity * 0.04)
+        est_price = round(last_price + (daily_drift * step) + (np.sin(step / 2.0) * 0.35), 2)
         est_price = max(est_price, 5.0)
 
-        # Confidence bounds expand with forecast horizon (fan chart)
-        uncertainty = round((mae_display * np.sqrt(step)) * 0.85, 2)
-        lower_bound = round(max(est_price - uncertainty, est_price * 0.80), 2)
-        upper_bound = round(est_price + uncertainty, 2)
+        # Fan-chart uncertainty bounds expanding chronologically with horizon
+        horizon_uncertainty = round(base_uncertainty * np.sqrt(step), 2)
+        lower_bound = round(max(est_price - horizon_uncertainty, est_price * 0.75), 2)
+        upper_bound = round(est_price + horizon_uncertainty, 2)
 
         future_points.append({
             'day': f'+{step}d',
@@ -138,27 +208,51 @@ def predict_crop_price(crop='Tomato', market_name='Pimpalgaon APMC', district='N
 
     final_prediction = future_points[-1]
     price_delta = round(final_prediction['estimated_price'] - current_spot, 2)
-    percentage_delta = round((price_delta / current_spot) * 100, 1)
+    percentage_delta = round((price_delta / current_spot) * 100, 1) if current_spot > 0 else 0.0
 
-    # Determine recommended action based on ML forecast
+    # 4. Transparent, Deterministic Confidence Classification
+    # Rule:
+    # - HIGH: MODEL_BASED with >= 14 observations, valid MAE <= 15% of spot price
+    # - MEDIUM: MODEL_BASED with 7-13 observations, or valid MAE <= 25% of spot price
+    # - LOW: Fallback, synthetic, sparse data, or validation error > 25%
+    if prediction_type == 'MODEL_BASED' and actual_mae is not None:
+        if total_observations >= 14 and actual_mae <= (current_spot * 0.15):
+            confidence_level = 'HIGH'
+            confidence_rationale = (
+                f"High confidence: {total_observations} chronological observations, "
+                f"validation MAE of ₹{actual_mae}/kg ({actual_mae/current_spot*100:.1f}% of spot price)."
+            )
+        elif total_observations >= 7 and actual_mae <= (current_spot * 0.25):
+            confidence_level = 'MEDIUM'
+            confidence_rationale = (
+                f"Medium confidence: {total_observations} observations, "
+                f"validation MAE of ₹{actual_mae}/kg ({actual_mae/current_spot*100:.1f}% of spot price)."
+            )
+        else:
+            confidence_level = 'LOW'
+            confidence_rationale = f"Low confidence: higher validation error (MAE ₹{actual_mae}/kg)."
+    elif prediction_type == 'SYNTHETIC_DEMO':
+        confidence_level = 'LOW'
+        confidence_rationale = "Low confidence: based on synthetic demonstration data."
+    else:
+        confidence_level = 'LOW'
+        confidence_rationale = "Low confidence: insufficient historical records for trained ML model."
+
+    # Recommended action based on projected trajectory
     if percentage_delta >= 8.0:
-        recommendation = 'HOLD & WAIT'
-        action_reason = f'Price expected to surge by +₹{price_delta}/kg (+{percentage_delta}%) over the next {horizon_days} days due to contracting supply.'
-        confidence_level = 'HIGH'
+        recommendation = 'CONSIDER HOLDING'
+        action_reason = f'Estimated price rise of +₹{price_delta}/kg (+{percentage_delta}%) over {horizon_days} days.'
     elif percentage_delta >= 2.0:
-        recommendation = 'SELL SOON'
-        action_reason = f'Moderate price increase of +₹{price_delta}/kg (+{percentage_delta}%) projected. Good window to harvest within 3-5 days.'
-        confidence_level = 'HIGH'
+        recommendation = 'SUGGESTED SALE WINDOW'
+        action_reason = f'Moderate estimated price increase of +₹{price_delta}/kg (+{percentage_delta}%).'
     elif percentage_delta >= -3.0:
         recommendation = 'SELL NOW (STABLE)'
-        action_reason = f'Market prices are projected to remain flat (delta {percentage_delta}%). Selling now minimizes perishability and weight-loss risk.'
-        confidence_level = 'MEDIUM'
+        action_reason = f'Projected flat price trend (delta {percentage_delta}%). Selling now minimizes perishability loss.'
     else:
-        recommendation = 'SELL IMMEDIATELY / STORE'
-        action_reason = f'Prices projected to decline by {percentage_delta}% due to surging mandi arrivals. Consider cold storage or sell immediately.'
-        confidence_level = 'MEDIUM'
+        recommendation = 'CONSIDER EARLY SALE / STORAGE'
+        action_reason = f'Estimated price softening by {percentage_delta}% due to supply arrivals. Consider storage or immediate sale.'
 
-    # Save prediction record to DB for auditability
+    # Log audit record safely
     try:
         pred_record = PricePrediction(
             crop=crop,
@@ -169,21 +263,22 @@ def predict_crop_price(crop='Tomato', market_name='Pimpalgaon APMC', district='N
             lower_estimate=final_prediction['lower_estimate'],
             upper_estimate=final_prediction['upper_estimate'],
             confidence_indicator_placeholder=confidence_level,
-            model_type='SKLEARN_RIDGE_EMA_ENSEMBLE'
+            model_type=f'RIDGE_{prediction_type}'
         )
         db.session.add(pred_record)
         db.session.commit()
     except Exception as e:
         db.session.rollback()
-        print(f"[PricePrediction] Notice: audit record logging skipped: {e}")
 
-    # Build response object
     return {
+        'commodity': crop,
         'crop': crop,
         'market': market_name,
         'district': district,
         'current_spot_price': current_spot,
+        'reference_price': current_spot,
         'horizon_days': horizon_days,
+        'prediction_date': (today + timedelta(days=horizon_days)).strftime('%d %b %Y'),
         'target_date': (today + timedelta(days=horizon_days)).strftime('%d %b %Y'),
         'predicted_price': final_prediction['estimated_price'],
         'lower_estimate': final_prediction['lower_estimate'],
@@ -192,34 +287,31 @@ def predict_crop_price(crop='Tomato', market_name='Pimpalgaon APMC', district='N
         'percentage_delta': percentage_delta,
         'recommendation': recommendation,
         'action_reason': action_reason,
+        'prediction_type': prediction_type,
+        'source_type': source_type,
+        'data_source': data_source_label,
+        'observations_used': total_observations,
+        'training_samples': train_count,
+        'validation_samples': val_count,
+        'data_date_range': date_range_str,
+        'actual_mae': actual_mae,
+        'actual_r2': actual_r2,
+        'metrics_status': metrics_status,
         'confidence_level': confidence_level,
-        'confidence_score': 88 if confidence_level == 'HIGH' else 74,
+        'confidence_rationale': confidence_rationale,
+        'disclaimer': STANDARD_DISCLAIMER,
         'forecast_series': future_points,
-        'drivers': [
-            {
-                'name': 'Mandi Supply & Arrivals',
-                'impact': 'POSITIVE' if elasticity < 0 and percentage_delta > 0 else 'NEGATIVE',
-                'weight': '35%',
-                'description': f'Arrival volume trend at {market_name} with estimated elasticity index of {elasticity}.'
-            },
-            {
-                'name': 'Regional Festival & Seasonality',
-                'impact': 'POSITIVE',
-                'weight': '40%',
-                'description': f'Maharashtra state seasonal demand multiplier of {seasonality}x for {crop}.'
-            },
-            {
-                'name': 'Historical Price Momentum',
-                'impact': 'POSITIVE' if price_delta > 0 else 'NEUTRAL',
-                'weight': '25%',
-                'description': '14-day trailing Exponential Moving Average (EMA) indicates upward velocity.'
-            }
-        ],
         'model_metrics': {
-            'algorithm': 'Ridge Regression + Exponential Moving Average (EMA) Ensemble',
-            'r2_score': r2_display,
-            'mean_absolute_error': f'₹{mae_display}/kg',
-            'training_samples': max(len(history_records), 14),
+            'algorithm': 'Ridge Regression' if prediction_type == 'MODEL_BASED' else 'Empirical Rule-Based Fallback',
+            'prediction_type': prediction_type,
+            'source_type': source_type,
+            'r2_score': actual_r2 if actual_r2 is not None else 'Insufficient validation data',
+            'mean_absolute_error': f'₹{actual_mae}/kg' if actual_mae is not None else 'Insufficient validation data',
+            'observations_used': total_observations,
+            'training_samples': train_count,
+            'validation_samples': val_count,
+            'date_range': date_range_str,
+            'metrics_status': metrics_status,
             'last_trained': today.strftime('%d %b %Y')
         }
     }

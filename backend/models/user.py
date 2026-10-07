@@ -10,7 +10,7 @@ class User(db.Model):
     phone = db.Column(db.String(20), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=True)
     password_hash = db.Column(db.String(255), nullable=False)
-    role = db.Column(db.Enum('FARMER', 'FPO', 'BUYER', 'WAREHOUSE', 'ADMIN', name='user_roles'), nullable=False)
+    role = db.Column(db.Enum('FARMER', 'FPO', 'BUYER', 'WAREHOUSE', 'ADMIN', 'LOGISTICS', name='user_roles'), nullable=False)
     verification_status = db.Column(
         db.Enum('PENDING', 'VERIFIED', 'REJECTED', 'SUSPENDED', name='verification_statuses'),
         default='PENDING'
@@ -26,6 +26,7 @@ class User(db.Model):
     fpo_profile = db.relationship('FPOProfile', backref='user', uselist=False, cascade='all, delete-orphan')
     buyer_profile = db.relationship('BuyerProfile', backref='user', uselist=False, cascade='all, delete-orphan')
     warehouse_profile = db.relationship('WarehouseProfile', backref='user', uselist=False, cascade='all, delete-orphan')
+    logistics_profile = db.relationship('LogisticsProfile', backref='user', uselist=False, cascade='all, delete-orphan')
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -34,20 +35,25 @@ class User(db.Model):
         self.password_hash = generate_password_hash(password)
 
     def check_password(self, password):
-        # Allow designated role password OR fallback 'password123' for smooth evaluation
-        if check_password_hash(self.password_hash, password):
+        # Cryptographic password hash verification
+        if self.password_hash and check_password_hash(self.password_hash, password):
             return True
-        # Fail-safe demo password aliases:
-        demo_aliases = {
-            'FARMER': ['farmer123', 'password123'],
-            'FPO': ['fpo123', 'password123'],
-            'BUYER': ['buyer123', 'password123'],
-            'WAREHOUSE': ['warehouse123', 'password123'],
-            'ADMIN': ['admin123', 'password123']
-        }
-        allowed = demo_aliases.get(self.role, ['password123'])
-        if password in allowed:
-            return True
+
+        # Demo evaluation aliases ONLY for seeded prototype accounts
+        demo_phones = {'9823012345', '9823054321', '9823099999', '9820011223', '9830022334', '9810000001', '9820099887'}
+        is_demo_account = (self.phone in demo_phones) or (self.email and self.email.endswith('@agrisaathi.demo'))
+        if is_demo_account:
+            demo_aliases = {
+                'FARMER': ['farmer123', 'password123'],
+                'FPO': ['fpo123', 'password123'],
+                'BUYER': ['buyer123', 'password123'],
+                'WAREHOUSE': ['warehouse123', 'password123'],
+                'ADMIN': ['admin123', 'password123'],
+                'LOGISTICS': ['logistics123', 'password123']
+            }
+            allowed = demo_aliases.get(self.role, ['password123'])
+            if password in allowed:
+                return True
         return False
 
     def to_dict(self):
@@ -70,6 +76,10 @@ class User(db.Model):
             profile_data = self.warehouse_profile.to_dict()
             if not display_name:
                 display_name = self.warehouse_profile.warehouse_name
+        elif self.role == 'LOGISTICS' and self.logistics_profile:
+            profile_data = self.logistics_profile.to_dict()
+            if not display_name:
+                display_name = self.logistics_profile.company_name
         elif self.role == 'ADMIN':
             display_name = display_name or 'MahaAgri Nodal Officer'
 
@@ -88,6 +98,7 @@ class User(db.Model):
             'fpo_profile': self.fpo_profile.to_dict() if self.fpo_profile else None,
             'buyer_profile': self.buyer_profile.to_dict() if self.buyer_profile else None,
             'warehouse_profile': self.warehouse_profile.to_dict() if self.warehouse_profile else None,
+            'logistics_profile': self.logistics_profile.to_dict() if self.logistics_profile else None,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
 
@@ -286,3 +297,53 @@ class WarehouseProfile(db.Model):
             'account_holder_name': self.account_holder_name,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
+
+
+class LogisticsProfile(db.Model):
+    __tablename__ = 'logistics_profiles'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    company_name = db.Column(db.String(150), nullable=False)
+    contact_person = db.Column(db.String(120), nullable=False)
+    phone = db.Column(db.String(20), nullable=False)
+    email = db.Column(db.String(120), nullable=True)
+    vehicle_types = db.Column(db.String(255), default='MINI_TRUCK,PICKUP,LCV,TRUCK,REFRIGERATED_VEHICLE')
+    vehicle_count = db.Column(db.Integer, default=5)
+    service_districts = db.Column(db.String(255), default='Nashik,Pune,Mumbai,Ahmednagar')
+    availability_status = db.Column(db.String(50), default='AVAILABLE')  # AVAILABLE, BUSY, OFFLINE
+    license_number_masked = db.Column(db.String(100), nullable=True)
+    aadhaar_masked = db.Column(db.String(20), nullable=True)
+    bank_name = db.Column(db.String(100), nullable=True)
+    bank_account_masked = db.Column(db.String(30), nullable=True)
+    ifsc_code_masked = db.Column(db.String(20), nullable=True)
+    account_holder_name = db.Column(db.String(120), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+
+    def to_dict(self):
+        user = User.query.get(self.user_id) if self.user_id else None
+        v_status = user.verification_status if user else 'PENDING'
+        return {
+            'id': self.id,
+            'user_id': self.user_id,
+            'verification_status': v_status,
+            'company_name': self.company_name,
+            'contact_person': self.contact_person,
+            'phone': self.phone,
+            'email': self.email,
+            'vehicle_types': self.vehicle_types,
+            'vehicle_count': self.vehicle_count,
+            'service_districts': self.service_districts,
+            'availability_status': self.availability_status,
+            'license_number_masked': self.license_number_masked,
+            'aadhaar_masked': self.aadhaar_masked,
+            'bank_name': self.bank_name,
+            'bank_account_masked': self.bank_account_masked,
+            'ifsc_code_masked': self.ifsc_code_masked,
+            'account_holder_name': self.account_holder_name,
+            'created_at': self.created_at.isoformat() if self.created_at else None
+        }
+

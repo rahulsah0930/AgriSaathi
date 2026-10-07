@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <radialGradient id="onGrad" cx="40%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#e879f9"/>
+      <stop offset="60%" stop-color="#a21caf"/>
+      <stop offset="100%" stop-color="#701a75"/>
+    </radialGradient>
+  </defs>
+  <rect width="100" height="100" rx="16" fill="#fdf4ff"/>
+  <path d="M50 20 C68 20 82 38 82 58 C82 74 68 84 50 84 C32 84 18 74 18 58 C18 38 32 20 50 20 Z" fill="url(#onGrad)"/>
+  <!-- Root tuft -->
+  <path d="M46 84 L44 92 M50 84 L50 94 M54 84 L56 92" stroke="#ca8a04" stroke-width="2" stroke-linecap="round"/>
+  <!-- Neck stem -->
+  <path d="M50 20 C48 14 52 10 50 6" stroke="#65a30d" stroke-width="4" stroke-linecap="round" fill="none"/>
+  <!-- Papery peel lines -->
+  <path d="M30 40 Q50 30 70 40" stroke="#f0abfc" stroke-width="1.5" fill="none" opacity="0.6"/>
+  <path d="M24 58 Q50 50 76 58" stroke="#f0abfc" stroke-width="1.5" fill="none" opacity="0.6"/>
+  <path d="M32 72 Q50 68 68 72" stroke="#f0abfc" stroke-width="1.5" fill="none" opacity="0.6"/>
+</svg>

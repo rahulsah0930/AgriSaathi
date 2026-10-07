@@ -7,6 +7,7 @@ import {
   Textarea,
   Button,
   Badge,
+  CommodityAutocomplete,
 } from '../../components/common';
 import {
   PlusCircle,
@@ -93,6 +94,7 @@ const FRESHNESS_OPTIONS = [
 export const AddProducePage = ({ user, onNavigate }) => {
   const [form, setForm] = useState({
     crop: '',
+    commodity_id: null,
     variety: '',
     quantity: '',
     unit: 'kg',
@@ -205,6 +207,7 @@ export const AddProducePage = ({ user, onNavigate }) => {
       // Reset form
       setForm({
         crop: '',
+        commodity_id: null,
         variety: '',
         quantity: '',
         unit: 'kg',
@@ -339,14 +342,18 @@ export const AddProducePage = ({ user, onNavigate }) => {
               className=""
             >
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '4px 0' }}>
-                <Select
-                  label="Crop Type"
+                <CommodityAutocomplete
+                  label="Crop / Commodity"
                   id="crop"
                   name="crop"
                   value={form.crop}
-                  onChange={(e) => handleChange('crop', e.target.value)}
-                  options={CROP_OPTIONS}
-                  placeholder="Select your crop..."
+                  onChange={(e) => {
+                    handleChange('crop', e.target.value);
+                    if (e.target.commodity_id) {
+                      handleChange('commodity_id', e.target.commodity_id);
+                    }
+                  }}
+                  placeholder="Search produce (e.g. Tomato, Tamatar, टमाटर, बटाटा)..."
                   required
                   error={errors.crop}
                 />

@@ -36,11 +36,11 @@ export const PaymentsEscrowPage = ({ user, onNavigate }) => {
   }, [user?.id]);
 
   const totalEscrow = payments
-    .filter((p) => p.escrow_status === 'HELD_BY_GOVT_ESCROW')
+    .filter((p) => p.status === 'ESCROW_HELD' || p.escrow_status === 'HELD_BY_GOVT_ESCROW' || p.escrow_status === 'HELD_IN_SIMULATED_ESCROW')
     .reduce((sum, p) => sum + p.amount, 0);
 
   const totalSettled = payments
-    .filter((p) => p.escrow_status === 'RELEASED_TO_SELLER')
+    .filter((p) => p.status === 'RELEASED' || p.status === 'SETTLED' || p.escrow_status === 'RELEASED_TO_SELLER')
     .reduce((sum, p) => sum + p.amount, 0);
 
   return (
@@ -48,15 +48,15 @@ export const PaymentsEscrowPage = ({ user, onNavigate }) => {
       <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1 style={{ fontSize: '1.6rem', fontWeight: 800, margin: 0, color: 'var(--slate-900)' }}>
-            Government Escrow & Payments Vault
+            Prototype Escrow & Payments Vault
           </h1>
           <p style={{ color: 'var(--slate-600)', margin: '4px 0 0', fontSize: '0.9rem' }}>
-            Maharashtra Agriculture Marketing Board Secured Escrow Settlement Engine
+            Simulated Escrow Settlement Engine (SIH Prototype — Production State-Machine Architecture)
           </p>
         </div>
 
-        <Badge variant="success" size="lg">
-          State Escrow Lien Active
+        <Badge variant="info" size="lg">
+          Prototype Escrow Active
         </Badge>
       </div>
 
@@ -65,7 +65,7 @@ export const PaymentsEscrowPage = ({ user, onNavigate }) => {
         <Card style={{ padding: '18px' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
-              <div style={{ fontSize: '0.8rem', color: 'var(--slate-500)' }}>Locked in Government Escrow</div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--slate-500)' }}>Locked in Prototype Escrow</div>
               <div style={{ fontSize: '1.6rem', fontWeight: 800, color: '#f59e0b' }}>
                 ₹{totalEscrow.toLocaleString()}
               </div>

@@ -8,6 +8,7 @@ import {
   Input,
   Select,
   LoadingState,
+  CommodityAutocomplete,
 } from '../../components/common';
 import {
   Sparkles,
@@ -162,22 +163,12 @@ export const PricePredictionPage = ({ user, onNavigate }) => {
             alignItems: 'flex-end',
           }}
         >
-          <div>
-            <label
-              style={{
-                display: 'block',
-                fontSize: '0.85rem',
-                fontWeight: 600,
-                color: 'var(--slate-700)',
-                marginBottom: '6px',
-              }}
-            >
-              Produce / Crop
-            </label>
-            <Select
-              options={CROP_OPTIONS}
+          <div style={{ minWidth: '220px' }}>
+            <CommodityAutocomplete
+              label="Produce / Crop"
               value={selectedCrop}
               onChange={(e) => setSelectedCrop(e.target.value)}
+              placeholder="Search produce..."
             />
           </div>
 
@@ -305,14 +296,37 @@ export const PricePredictionPage = ({ user, onNavigate }) => {
             }}
           >
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '8px', marginBottom: '8px' }}>
                 <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--primary-800)', textTransform: 'uppercase' }}>
-                  AI RECOMMENDATION ENGINE
+                  {predictionData.prediction_type === 'MODEL_BASED' ? 'RIDGE REGRESSION PRICE FORECAST' : 'PROTOTYPE MARKET ESTIMATE'}
                 </span>
-                <Badge variant={predictionData.confidence_level === 'HIGH' ? 'success' : 'warning'}>
-                  {predictionData.confidence_score}% Model Confidence
+                <Badge variant={predictionData.prediction_type === 'MODEL_BASED' ? 'success' : 'warning'}>
+                  {predictionData.prediction_type}
+                </Badge>
+                <Badge variant={predictionData.confidence_level === 'HIGH' ? 'success' : (predictionData.confidence_level === 'MEDIUM' ? 'info' : 'warning')}>
+                  {predictionData.confidence_level} CONFIDENCE
+                </Badge>
+                <Badge variant="outline-primary">
+                  {predictionData.data_source || 'Market Records'}
                 </Badge>
               </div>
+
+              {predictionData.prediction_type !== 'MODEL_BASED' && (
+                <div
+                  style={{
+                    marginBottom: '10px',
+                    padding: '8px 12px',
+                    backgroundColor: '#fffbeb',
+                    border: '1px solid #fde68a',
+                    borderRadius: 'var(--radius-sm)',
+                    fontSize: '0.84rem',
+                    color: '#92400e',
+                  }}
+                >
+                  ⚠️ Prototype Estimate — insufficient historical data for full model prediction ({predictionData.observations_used} observations used, minimum 7 required for ML split).
+                </div>
+              )}
+
               <h2
                 style={{
                   margin: 0,
@@ -514,40 +528,66 @@ export const PricePredictionPage = ({ user, onNavigate }) => {
 
           {/* Model Architecture & Auditability */}
           <Card
-            title="GovTech Model Integrity & Audit Details"
-            subtitle="Standardized parameters and validation performance metrics"
+            title="Forecasting Model & Provenance Audit Details"
+            subtitle="Standardized model parameters, data provenance, and empirical validation metrics"
           >
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', fontSize: '0.88rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
-                <span style={{ color: 'var(--slate-600)' }}>Deployed Ensemble Architecture:</span>
+                <span style={{ color: 'var(--slate-600)' }}>Prediction Architecture:</span>
                 <strong style={{ color: 'var(--slate-900)' }}>
-                  {predictionData.model_metrics.algorithm}
+                  {predictionData.model_metrics?.algorithm || 'Ridge Regression'} ({predictionData.prediction_type})
+                </strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
+                <span style={{ color: 'var(--slate-600)' }}>Data Source:</span>
+                <strong style={{ color: 'var(--primary-700)' }}>
+                  {predictionData.data_source || predictionData.source_type || 'Historical APMC Market Records'}
+                </strong>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
+                <span style={{ color: 'var(--slate-600)' }}>Observations Used:</span>
+                <strong style={{ color: 'var(--slate-900)' }}>
+                  {predictionData.observations_used} Daily Mandi Reports ({predictionData.data_date_range || 'Trailing observations'})
                 </strong>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
                 <span style={{ color: 'var(--slate-600)' }}>Coefficient of Determination (R² Score):</span>
-                <strong style={{ color: '#16a34a' }}>
-                  {predictionData.model_metrics.r2_score} (Good Fit)
+                <strong style={{ color: predictionData.actual_r2 !== null && predictionData.actual_r2 !== undefined ? '#16a34a' : 'var(--slate-500)' }}>
+                  {predictionData.actual_r2 !== null && predictionData.actual_r2 !== undefined ? predictionData.actual_r2 : 'Insufficient validation data'}
                 </strong>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
                 <span style={{ color: 'var(--slate-600)' }}>Mean Absolute Error (MAE):</span>
                 <strong style={{ color: 'var(--slate-900)' }}>
-                  {predictionData.model_metrics.mean_absolute_error}
+                  {predictionData.actual_mae !== null && predictionData.actual_mae !== undefined ? `₹${predictionData.actual_mae}/kg` : 'Insufficient validation data'}
                 </strong>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
-                <span style={{ color: 'var(--slate-600)' }}>Training Sample Records:</span>
+                <span style={{ color: 'var(--slate-600)' }}>Confidence Classification:</span>
                 <strong style={{ color: 'var(--slate-900)' }}>
-                  {predictionData.model_metrics.training_samples} Daily Mandi Reports
+                  {predictionData.confidence_level} — {predictionData.confidence_rationale}
                 </strong>
               </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', paddingBottom: '8px', borderBottom: '1px solid var(--border-color)' }}>
-                <span style={{ color: 'var(--slate-600)' }}>Government Telemetry Grounding:</span>
-                <strong style={{ color: 'var(--primary-700)' }}>
-                  Agmarknet / Maharashtra MSAMB Protocol
-                </strong>
-              </div>
+            </div>
+
+            <div
+              style={{
+                marginTop: '16px',
+                padding: '12px 16px',
+                backgroundColor: '#f8fafc',
+                border: '1px solid var(--border-color)',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '0.82rem',
+                color: 'var(--slate-600)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+              }}
+            >
+              <Info size={16} color="var(--slate-500)" style={{ flexShrink: 0 }} />
+              <span>
+                <strong>Advisory Disclaimer:</strong> {predictionData.disclaimer || 'Prototype market estimate. Agricultural prices are affected by weather, arrivals, demand, policy, quality and other factors. This is not a guaranteed sale price.'}
+              </span>
             </div>
           </Card>
         </div>
