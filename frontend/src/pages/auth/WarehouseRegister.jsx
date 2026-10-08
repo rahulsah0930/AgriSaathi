@@ -89,7 +89,7 @@ export const WarehouseRegister = ({ onBackToLanding, onRegisterSuccess, onSwitch
       if (res.success) {
         if (res.token) {
           api.setToken(res.token);
-          api.setUser(res.user);
+          api.setStoredUser(res.user);
         }
         if (onRegisterSuccess) {
           onRegisterSuccess(res.user, res.message, res.token);

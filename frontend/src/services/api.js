@@ -28,6 +28,8 @@ export const removeToken = () => {
   } catch (e) {}
 };
 
+export const clearToken = removeToken;
+
 export const getStoredUser = () => {
   try {
     const raw = localStorage.getItem(USER_KEY);
@@ -36,6 +38,8 @@ export const getStoredUser = () => {
     return null;
   }
 };
+
+export const getUser = getStoredUser;
 
 export const setStoredUser = (user) => {
   try {
@@ -46,6 +50,16 @@ export const setStoredUser = (user) => {
     }
   } catch (e) {}
 };
+
+export const setUser = setStoredUser;
+
+export const clearUser = () => {
+  try {
+    localStorage.removeItem(USER_KEY);
+  } catch (e) {}
+};
+
+export const getBaseUrl = () => API_BASE_URL;
 
 export const getImageUrl = (url) => {
   if (!url) return null;
@@ -138,9 +152,14 @@ export const api = {
   getToken,
   setToken,
   removeToken,
+  clearToken,
   getStoredUser,
+  getUser: getStoredUser,
   setStoredUser,
+  setUser: setStoredUser,
+  clearUser,
   getCurrentUser: () => request('/api/auth/me'),
+  getBaseUrl,
 
   // Health check
   checkHealth: () => request('/api/health'),

@@ -81,7 +81,7 @@ export const FPORegister = ({ onBackToLanding, onRegisterSuccess, onSwitchToLogi
       if (res.success) {
         if (res.token) {
           api.setToken(res.token);
-          api.setUser(res.user);
+          api.setStoredUser(res.user);
         }
         onRegisterSuccess(res.user, res.message, res.token);
       } else {

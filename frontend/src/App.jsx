@@ -135,7 +135,7 @@ function App() {
   const [feedbackBanner, setFeedbackBanner] = useState(null);
 
   // Active authenticated user state
-  const [currentUser, setCurrentUser] = useState(() => api.getUser());
+  const [currentUser, setCurrentUser] = useState(() => api.getStoredUser());
   const [unreadNotifs, setUnreadNotifs] = useState(0);
 
   // Check stored JWT token and restore session on mount
@@ -148,7 +148,7 @@ function App() {
         const res = await api.get('/api/auth/me');
         if (res && res.user) {
           setCurrentUser(res.user);
-          api.setUser(res.user);
+          api.setStoredUser(res.user);
           // Route to role portal if on landing or login
           if (res.user.role === 'BUYER') {
             setCurrentView('buyer-portal');
@@ -162,7 +162,7 @@ function App() {
         }
       } catch (err) {
         console.warn('Session expired or invalid:', err);
-        api.clearToken();
+        api.removeToken();
         api.clearUser();
         setCurrentUser(null);
       }
@@ -175,7 +175,7 @@ function App() {
   useEffect(() => {
     const handleUnauthorized = () => {
       setCurrentUser(null);
-      api.clearToken();
+      api.removeToken();
       api.clearUser();
       setLoginInitialRole('FARMER');
       setCurrentView('login');
@@ -292,7 +292,7 @@ function App() {
   // Handle registration success
   const handleRegisterSuccess = (user, message, token) => {
     setCurrentUser(user);
-    if (user) api.setUser(user);
+    if (user) api.setStoredUser(user);
     if (token) api.setToken(token);
     setActiveRoute('dashboard');
     setFeedbackBanner({
@@ -310,7 +310,7 @@ function App() {
   // Handle login success
   const handleLoginSuccess = (user, message, token) => {
     setCurrentUser(user);
-    if (user) api.setUser(user);
+    if (user) api.setStoredUser(user);
     if (token) api.setToken(token);
     setActiveRoute('dashboard');
     setFeedbackBanner({
@@ -330,7 +330,7 @@ function App() {
     try {
       await api.post('/api/auth/logout');
     } catch (e) {}
-    api.clearToken();
+    api.removeToken();
     api.clearUser();
     setCurrentUser(null);
     setFeedbackBanner(null);
