@@ -281,7 +281,7 @@ def seed_demo_accounts():
     # Seed related domain data
     _seed_demo_lots(farmer1.id, fpo1.id)
     _seed_demo_market_prices()
-    _seed_demo_warehouses()
+    _seed_demo_warehouses(wh1.id)
     _seed_demo_offers(farmer1.id, buyer1.id)
     _seed_demo_fpo_members()
     _seed_demo_transactions(farmer1.id, fpo1.id, buyer1.id)
@@ -478,69 +478,62 @@ def _seed_demo_market_prices():
     print("[AgriSaathi] Successfully seeded APMC market prices.")
 
 
-def _seed_demo_warehouses():
+def _seed_demo_warehouses(wh_user_id=None):
     """Seeds Maharashtra state certified cold storage warehouses."""
-    if Warehouse.query.first():
-        return
-
     print("[AgriSaathi] Seeding Maharashtra certified cold storage directories...")
 
-    warehouses = [
-        Warehouse(
-            name='Sahyadri Farmers Cold Chain Hub',
-            operator='Sahyadri Agro Retailing Ltd.',
-            type='Cold Storage',
-            total_capacity=5000.0,
-            available_capacity=1850.0,
-            unit='tonnes',
-            temperature_range='0°C to 4°C',
-            humidity_range='90% - 95%',
-            monthly_tariff=65.0,
-            tariff_unit='₹/quintal/month',
-            district='Nashik',
-            taluka='Dindori',
-            village='Mohadi',
-            state='Maharashtra',
-            latitude=20.1250,
-            longitude=73.8650,
-            address='Sahyadri Agro Park, Gat No. 314, Dindori Road',
-            contact_phone='9823099999',
-            contact_email='coldchain@sahyadrifarmers.com',
-            certification='WDRA / APEDA Accredited Class A',
-            rating=4.8,
-            distance_km=14.5
-        ),
-        Warehouse(
-            name='Mahacold Agro Logistics Park',
-            operator='Maharashtra State Warehousing Corp (MSWC)',
-            type='Cold Storage',
-            total_capacity=3000.0,
-            available_capacity=800.0,
-            unit='tonnes',
-            temperature_range='2°C to 8°C',
-            humidity_range='85% - 90%',
-            monthly_tariff=55.0,
-            tariff_unit='₹/quintal/month',
-            district='Nashik',
-            taluka='Nashik',
-            village='Ambad',
-            state='Maharashtra',
-            latitude=19.9600,
-            longitude=73.7400,
-            address='Plot A-12, MIDC Ambad, Nashik',
-            contact_phone='9823011222',
-            contact_email='ambad.mswc@maharashtra.gov.in',
-            certification='MSWC / WDRA Certified',
-            rating=4.5,
-            distance_km=22.0
-        ),
+    if not wh_user_id:
+        wh_user = User.query.filter_by(role='WAREHOUSE').first()
+        wh_user_id = wh_user.id if wh_user else None
+
+    warehouse_entries = [
+        {
+            'name': 'Sahyadri Farmers Cold Chain Hub',
+            'operator_user_id': wh_user_id,
+            'verification_status': 'VERIFIED',
+            'district': 'Nashik',
+            'location': 'Sahyadri Agro Park, Gat No. 314, Dindori Road, Nashik',
+            'latitude': 20.1250,
+            'longitude': 73.8650,
+            'storage_type': 'COLD_STORAGE',
+            'supported_crops': 'Tomato, Onion, Grapes, Pomegranate',
+            'total_capacity': 5000.0,
+            'available_capacity': 1850.0,
+            'price_per_kg_per_day': round(65.0 / (100.0 * 30.0), 4),
+            'temperature_range_placeholder': '0°C to 4°C',
+            'availability_status': 'AVAILABLE'
+        },
+        {
+            'name': 'Mahacold Agro Logistics Park',
+            'operator_user_id': wh_user_id,
+            'verification_status': 'VERIFIED',
+            'district': 'Nashik',
+            'location': 'Plot A-12, MIDC Ambad, Nashik',
+            'latitude': 19.9600,
+            'longitude': 73.7400,
+            'storage_type': 'COLD_STORAGE',
+            'supported_crops': 'Tomato, Onion, Grapes, Pomegranate',
+            'total_capacity': 3000.0,
+            'available_capacity': 800.0,
+            'price_per_kg_per_day': round(55.0 / (100.0 * 30.0), 4),
+            'temperature_range_placeholder': '2°C to 8°C',
+            'availability_status': 'AVAILABLE'
+        },
     ]
 
-    for w in warehouses:
-        db.session.add(w)
+    added = 0
+    for data in warehouse_entries:
+        existing = Warehouse.query.filter_by(name=data['name']).first()
+        if not existing:
+            w = Warehouse(**data)
+            db.session.add(w)
+            added += 1
 
-    db.session.commit()
-    print("[AgriSaathi] Successfully seeded cold storage warehouses.")
+    if added > 0:
+        db.session.commit()
+        print(f"[AgriSaathi] Successfully seeded {added} cold storage warehouses.")
+    else:
+        print("[AgriSaathi] Cold storage warehouses already verified and up to date.")
 
 
 def _seed_demo_offers(farmer_id, buyer_id):
