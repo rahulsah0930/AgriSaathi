@@ -36,7 +36,15 @@ def create_app(config_class=Config):
     # Explicitly enforce database URI normalization on app.config before engine initialization
     raw_db_uri = app.config.get('SQLALCHEMY_DATABASE_URI') or os.getenv('DATABASE_URL')
     if raw_db_uri:
-        app.config['SQLALCHEMY_DATABASE_URI'] = normalize_database_url(raw_db_uri)
+        normalized_uri = normalize_database_url(raw_db_uri)
+        app.config['SQLALCHEMY_DATABASE_URI'] = normalized_uri
+        if normalized_uri.startswith('postgresql'):
+            engine_opts = dict(app.config.get('SQLALCHEMY_ENGINE_OPTIONS') or {})
+            engine_opts.setdefault('pool_pre_ping', True)
+            engine_opts.setdefault('pool_size', int(os.getenv('DB_POOL_SIZE', 10)))
+            engine_opts.setdefault('max_overflow', int(os.getenv('DB_MAX_OVERFLOW', 20)))
+            engine_opts.setdefault('pool_recycle', int(os.getenv('DB_POOL_RECYCLE', 300)))
+            app.config['SQLALCHEMY_ENGINE_OPTIONS'] = engine_opts
 
     # Safe diagnostic: print ONLY the selected database dialect/driver scheme during startup
     active_uri = app.config.get('SQLALCHEMY_DATABASE_URI') or ''
@@ -119,8 +127,9 @@ def create_app(config_class=Config):
                 from utils.migrate_phase7 import run_phase7_migration
                 run_phase7_migration()
             else:
-                # Production PostgreSQL: ensure tables exist if alembic hasn't run yet
-                db.create_all()
+                # Production PostgreSQL: Schema lifecycle is managed via Alembic migrations (flask db upgrade).
+                # db.create_all() is strictly omitted to prevent bypassing migration history.
+                print("[AgriSaathi] Production PostgreSQL mode active. Schema managed via Alembic migrations.")
 
             # Demo account seeding only if explicitly enabled
             if app.config.get('DEMO_MODE', False):

@@ -57,25 +57,32 @@ class Phase8InfrastructureTestSuite(unittest.TestCase):
             self.assertTrue(self.app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite:///'))
 
     def test_02_database_url_configuration_recognized(self):
-        """Verify explicit DATABASE_URL is recognized by normalize_database_url."""
+        """Verify explicit DATABASE_URL is recognized and normalized to postgresql+psycopg2."""
         raw_url = "postgresql://prod_user:strong_password@db.railway.internal:5432/agrisaathi"
+        expected = "postgresql+psycopg2://prod_user:strong_password@db.railway.internal:5432/agrisaathi"
         norm = normalize_database_url(raw_url)
-        self.assertEqual(norm, raw_url)
+        self.assertEqual(norm, expected)
 
     def test_03_postgres_url_normalization_and_acceptance(self):
-        """Verify Heroku/Render legacy postgres:// and Neon postgresql+psycopg:// URLs are normalized to postgresql:// for SQLAlchemy."""
+        """Verify Heroku/Render legacy postgres:// and Neon postgresql+psycopg:// URLs are normalized to postgresql+psycopg2:// for SQLAlchemy."""
         legacy_url = "postgres://usr:pwd@host.compute.amazonaws.com:5432/dbname"
-        expected = "postgresql://usr:pwd@host.compute.amazonaws.com:5432/dbname"
+        expected = "postgresql+psycopg2://usr:pwd@host.compute.amazonaws.com:5432/dbname"
         self.assertEqual(normalize_database_url(legacy_url), expected)
 
         # Test Neon SQLAlchemy default format with +psycopg
         neon_url = "postgresql+psycopg://usr:pwd@ep-cool-fog-123.us-east-2.aws.neon.tech/neondb?sslmode=require"
-        neon_expected = "postgresql://usr:pwd@ep-cool-fog-123.us-east-2.aws.neon.tech/neondb?sslmode=require"
+        neon_expected = "postgresql+psycopg2://usr:pwd@ep-cool-fog-123.us-east-2.aws.neon.tech/neondb?sslmode=require"
         self.assertEqual(normalize_database_url(neon_url), neon_expected)
 
         # Test postgres+psycopg variant
         postgres_psycopg = "postgres+psycopg://usr:pwd@ep-cool-fog-123.us-east-2.aws.neon.tech/neondb"
-        self.assertEqual(normalize_database_url(postgres_psycopg), "postgresql://usr:pwd@ep-cool-fog-123.us-east-2.aws.neon.tech/neondb")
+        self.assertEqual(normalize_database_url(postgres_psycopg), "postgresql+psycopg2://usr:pwd@ep-cool-fog-123.us-east-2.aws.neon.tech/neondb")
+
+        # Test psycopg3, psycopg2, quotes, and uppercase variants
+        self.assertEqual(normalize_database_url("postgresql+psycopg3://u:p@h:5432/d"), "postgresql+psycopg2://u:p@h:5432/d")
+        self.assertEqual(normalize_database_url("postgresql+psycopg2://u:p@h:5432/d"), "postgresql+psycopg2://u:p@h:5432/d")
+        self.assertEqual(normalize_database_url('"postgresql://u:p@h:5432/d"'), "postgresql+psycopg2://u:p@h:5432/d")
+        self.assertEqual(normalize_database_url("'POSTGRESQL://u:p@h:5432/d'"), "postgresql+psycopg2://u:p@h:5432/d")
 
     def test_04_production_refuses_missing_jwt_secret(self):
         """Verify production mode refuses startup if JWT_SECRET_KEY is empty."""

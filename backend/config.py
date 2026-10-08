@@ -21,21 +21,25 @@ def normalize_database_url(url: str) -> str:
     """
     Normalizes database URLs to be fully SQLAlchemy compatible with psycopg2.
     Specifically handles:
-      - 'postgresql+psycopg://'  -> 'postgresql://' (Neon default Python/SQLAlchemy connection strings)
-      - 'postgres+psycopg://'    -> 'postgresql://'
-      - 'postgresql+psycopg3://' -> 'postgresql://'
-      - 'postgres+psycopg3://'   -> 'postgresql://'
-      - 'postgres://'            -> 'postgresql://' (Heroku/Render legacy scheme)
-    Strips whitespace and surrounding quotes.
+      - 'postgres://'            -> 'postgresql+psycopg2://'
+      - 'postgresql://'          -> 'postgresql+psycopg2://'
+      - 'postgresql+psycopg://'  -> 'postgresql+psycopg2://'
+      - 'postgres+psycopg://'    -> 'postgresql+psycopg2://'
+      - 'postgresql+psycopg3://' -> 'postgresql+psycopg2://'
+      - 'postgres+psycopg3://'   -> 'postgresql+psycopg2://'
+      - 'postgresql+psycopg2://' -> 'postgresql+psycopg2://'
+      - 'postgres+psycopg2://'   -> 'postgresql+psycopg2://'
+    Strips whitespace and surrounding single or double quotes.
     Case-insensitive scheme replacement.
-    Preserves existing postgresql:// and postgresql+psycopg2:// URLs, as well as SQLite.
+    Preserves username, password, hostname, database, port, and query params (e.g. sslmode=require).
+    Preserves SQLite URLs (e.g. sqlite:///).
     """
     if not url:
         return url
     trimmed = str(url).strip().strip("'\"")
-    pattern = r'^(?:postgres|postgresql)(?:\+(?:psycopg3|psycopg))?://'
+    pattern = r'^(?:postgres|postgresql)(?:\+(?:psycopg2|psycopg3|psycopg))?://'
     if re.match(pattern, trimmed, flags=re.IGNORECASE):
-        return re.sub(pattern, 'postgresql://', trimmed, count=1, flags=re.IGNORECASE)
+        return re.sub(pattern, 'postgresql+psycopg2://', trimmed, count=1, flags=re.IGNORECASE)
     return trimmed
 
 def mask_database_url(url: str) -> str:
@@ -136,8 +140,9 @@ class Config:
     @classmethod
     def validate_production_config(cls):
         """
-        Validates that production environment is not using insecure secrets,
-        missing database credentials, or broken cloud storage configuration.
+        Validates that production environment has all required configuration variables,
+        refuses insecure default secrets, and verifies database and storage configurations.
+        Fails early with clear variable names without exposing secrets.
         """
         if not cls.IS_PRODUCTION:
             return
@@ -148,33 +153,49 @@ class Config:
             cls.DATABASE_URL = normalize_database_url(env_db_url)
             cls.SQLALCHEMY_DATABASE_URI = cls.DATABASE_URL
 
-        # 1. Validate DATABASE_URL
+        # 1. Validate APP_ENV
+        if not cls.APP_ENV:
+            raise ValueError("CRITICAL: Required environment variable 'APP_ENV' is missing or empty.")
+
+        # 2. Validate DATABASE_URL
         if not cls.DATABASE_URL or not cls.SQLALCHEMY_DATABASE_URI:
             raise ValueError(
                 "CRITICAL: DATABASE_URL must be set in production mode (APP_ENV=production). "
                 "SQLite fallback is forbidden in production."
             )
+        if str(cls.SQLALCHEMY_DATABASE_URI).startswith('sqlite'):
+            raise ValueError("CRITICAL: SQLite is forbidden in production mode. 'DATABASE_URL' must be a valid PostgreSQL connection string.")
 
-        # 2. Validate Secrets
+        # 3. Validate SECRET_KEY
         if not cls.SECRET_KEY or cls.SECRET_KEY in INSECURE_SECRETS:
             raise ValueError(
-                "CRITICAL: Insecure or default SECRET_KEY detected in production. "
+                "CRITICAL: Required environment variable 'SECRET_KEY' is missing, empty, or using an insecure default value. "
                 "Please configure a strong, random SECRET_KEY."
             )
 
+        # 4. Validate JWT_SECRET_KEY
         if not cls.JWT_SECRET_KEY or cls.JWT_SECRET_KEY in INSECURE_SECRETS:
             raise ValueError(
-                "CRITICAL: Insecure or default JWT_SECRET_KEY detected in production. "
+                "CRITICAL: Required environment variable 'JWT_SECRET_KEY' is missing, empty, or using an insecure default value. "
                 "Please configure a strong, random JWT_SECRET_KEY."
             )
 
-        # 3. Validate Cloud Storage if configured for Cloudinary
+        # 5. Validate FRONTEND_URL
+        if not cls.FRONTEND_URL:
+            raise ValueError("CRITICAL: Required environment variable 'FRONTEND_URL' is missing or empty.")
+
+        # 6. Validate STORAGE_PROVIDER
+        if not cls.STORAGE_PROVIDER:
+            raise ValueError("CRITICAL: Required environment variable 'STORAGE_PROVIDER' is missing or empty.")
+
+        # 7. Validate Cloud Storage credentials when configured for Cloudinary
         if cls.STORAGE_PROVIDER == 'cloudinary':
-            if not (cls.CLOUDINARY_CLOUD_NAME and cls.CLOUDINARY_API_KEY and cls.CLOUDINARY_API_SECRET):
-                raise ValueError(
-                    "CRITICAL: STORAGE_PROVIDER=cloudinary selected in production, but "
-                    "CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, or CLOUDINARY_API_SECRET is missing."
-                )
+            if not cls.CLOUDINARY_CLOUD_NAME:
+                raise ValueError("CRITICAL: Required environment variable 'CLOUDINARY_CLOUD_NAME' is missing or empty when STORAGE_PROVIDER=cloudinary.")
+            if not cls.CLOUDINARY_API_KEY:
+                raise ValueError("CRITICAL: Required environment variable 'CLOUDINARY_API_KEY' is missing or empty when STORAGE_PROVIDER=cloudinary.")
+            if not cls.CLOUDINARY_API_SECRET:
+                raise ValueError("CRITICAL: Required environment variable 'CLOUDINARY_API_SECRET' is missing or empty when STORAGE_PROVIDER=cloudinary.")
 
     @classmethod
     def get_safe_status(cls):
@@ -184,5 +205,5 @@ class Config:
             'is_production': cls.IS_PRODUCTION,
             'demo_mode': cls.DEMO_MODE,
             'storage_provider': cls.STORAGE_PROVIDER,
-            'database_engine': 'postgresql' if (cls.SQLALCHEMY_DATABASE_URI and 'postgresql' in cls.SQLALCHEMY_DATABASE_URI) else 'sqlite'
+            'database_engine': 'postgresql+psycopg2' if (cls.SQLALCHEMY_DATABASE_URI and 'postgresql' in cls.SQLALCHEMY_DATABASE_URI) else 'sqlite'
         }
