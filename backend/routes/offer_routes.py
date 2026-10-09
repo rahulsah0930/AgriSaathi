@@ -153,7 +153,7 @@ def create_offer():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@offer_bp.route('/<int:offer_id>/counter', methods=['POST'])
+@offer_bp.route('/<int:offer_id>/counter', methods=['POST', 'PATCH'])
 @jwt_required
 def counter_offer(offer_id):
     """Submits a counter-offer in the negotiation chain (either by Seller or Buyer)."""
@@ -204,7 +204,7 @@ def counter_offer(offer_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@offer_bp.route('/<int:offer_id>/accept', methods=['POST'])
+@offer_bp.route('/<int:offer_id>/accept', methods=['POST', 'PATCH'])
 @jwt_required
 def accept_offer(offer_id):
     """
@@ -337,7 +337,7 @@ def accept_offer(offer_id):
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
-@offer_bp.route('/<int:offer_id>/reject', methods=['POST'])
+@offer_bp.route('/<int:offer_id>/reject', methods=['POST', 'PATCH'])
 def reject_offer(offer_id):
     """Declines an offer."""
     try:

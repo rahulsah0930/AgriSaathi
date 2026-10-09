@@ -407,9 +407,13 @@ def run_tests():
         # TEST 21: POD image validation works (PNG/JPG saved)
         # ====================================================================
         print("\n[TEST 21] Valid POD Image Upload Works...")
+        from PIL import Image
+        png_buf = io.BytesIO()
+        Image.new('RGB', (10, 10), color='green').save(png_buf, format='PNG')
+        png_buf.seek(0)
         pod_data = {
             'pod_notes': 'Produce delivered in 100 crates to Bay 3. Received by Mr. Nitin.',
-            'pod_image': (io.BytesIO(b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDRtestimage'), 'pod_receipt.png')
+            'pod_image': (png_buf, 'pod_receipt.png')
         }
         res21 = client.post(
             f"/api/logistics/{order1['id']}/upload-pod",

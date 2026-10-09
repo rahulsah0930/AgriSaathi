@@ -666,72 +666,11 @@ function App() {
 
       case 'logistics':
         return (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', maxWidth: '820px', margin: '30px auto', padding: '0 16px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-              <Button variant="outline-primary" icon={ArrowLeft} onClick={handleGoBack}>
-                ← Back
-              </Button>
-              <Button variant="primary" onClick={() => setActiveRoute('dashboard')}>
-                Return to Dashboard
-              </Button>
-            </div>
-
-            <Card style={{ padding: '48px 32px', textAlign: 'center', backgroundColor: '#ffffff', borderRadius: '16px', border: '1px solid var(--border-color)', boxShadow: '0 4px 16px rgba(0,0,0,0.04)' }}>
-              <div
-                style={{
-                  width: '72px',
-                  height: '72px',
-                  borderRadius: '50%',
-                  backgroundColor: '#eff6ff',
-                  color: '#2563eb',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  margin: '0 auto 20px',
-                  border: '2px solid #bfdbfe',
-                }}
-              >
-                <Truck size={36} />
-              </div>
-
-              <span
-                style={{
-                  display: 'inline-block',
-                  padding: '6px 14px',
-                  borderRadius: '20px',
-                  backgroundColor: '#dbeafe',
-                  color: '#1e40af',
-                  fontSize: '0.8rem',
-                  fontWeight: 700,
-                  letterSpacing: '0.04em',
-                  textTransform: 'uppercase',
-                  marginBottom: '16px',
-                }}
-              >
-                🔔 Coming Soon / Integration in Progress
-              </span>
-
-              <h2 style={{ fontSize: '1.6rem', fontWeight: 800, color: 'var(--slate-900)', margin: '0 0 12px' }}>
-                Agricultural Logistics & Cold-Chain Transport Network
-              </h2>
-
-              <p style={{ fontSize: '0.96rem', color: 'var(--slate-600)', lineHeight: 1.6, maxWidth: '580px', margin: '0 auto 28px' }}>
-                Farmgate pickup scheduling, multi-mandi transport dispatch, and temperature-controlled reefer fleet allocation across Maharashtra are currently scheduled for direct integration under the state GovTech Agri-Corridor roadmap.
-              </p>
-
-              <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                <Button variant="outline-primary" icon={ArrowLeft} onClick={handleGoBack}>
-                  ← Back to Previous Module
-                </Button>
-                <Button variant="primary" onClick={() => setActiveRoute('dashboard')}>
-                  Go to Main Dashboard
-                </Button>
-                <Button variant="outline-primary" onClick={() => setActiveRoute('fpo-aggregation')}>
-                  Go to FPO Portal
-                </Button>
-              </div>
-            </Card>
-          </div>
+          <TransactionsPage
+            user={user}
+            onNavigate={handleNavigate}
+            focusLogistics={true}
+          />
         );
 
       default:

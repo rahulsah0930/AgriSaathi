@@ -32,11 +32,11 @@ export const Sidebar = ({
     { id: 'storage', label: 'Storage Discovery', icon: Warehouse },
     { type: 'divider', label: 'Transactions & Support' },
     { id: 'transactions', label: 'Transactions', icon: Receipt },
+    { id: 'logistics', label: 'Logistics & Fleet', icon: Truck, badge: 'Live' },
     { id: 'payments', label: 'Payments & Escrow', icon: CreditCard },
     { id: 'grievances', label: 'Grievances', icon: AlertCircle },
     { id: 'notifications', label: 'Notifications', icon: Bell },
     { id: 'profile', label: 'Profile', icon: User },
-    { id: 'logistics', label: 'Logistics', icon: Truck, comingSoon: true },
   ];
 
   return (

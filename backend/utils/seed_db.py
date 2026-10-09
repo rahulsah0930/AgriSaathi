@@ -290,11 +290,30 @@ def seed_demo_accounts():
 
 
 def _seed_demo_lots(farmer_id, fpo_id):
-    """Seeds demonstration crop lots with image records and AI quality assessments."""
-    if CropLot.query.first():
+    """Seeds demonstration crop lots with image records and authentic produce photographs."""
+    legacy_url_map = {
+        'Tomato': 'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=600&auto=format&fit=crop',
+        'Onion': 'https://images.unsplash.com/photo-1618512496248-a07fe83aa8cb?w=600&auto=format&fit=crop',
+        'Grapes': 'https://images.unsplash.com/photo-1596363505729-4190a9506133?w=600&auto=format&fit=crop',
+        'Pomegranate': 'https://images.unsplash.com/photo-1615485290382-441e4d049cb5?w=600&auto=format&fit=crop',
+        'Wheat': 'https://images.unsplash.com/photo-1574323347407-f5e1ad6d020b?w=600&auto=format&fit=crop',
+    }
+    existing_lots = CropLot.query.all()
+    if existing_lots:
+        updated = False
+        for el in existing_lots:
+            if el.image_url and '/uploads/crop_lots/' in el.image_url and el.crop in legacy_url_map:
+                el.image_url = legacy_url_map[el.crop]
+                for img in el.images:
+                    if img.is_primary and '/uploads/crop_lots/' in img.image_url:
+                        img.image_url = legacy_url_map[el.crop]
+                updated = True
+        if updated:
+            db.session.commit()
+            print("[AgriSaathi] Modernized existing demo crop lots to authentic produce photographs.")
         return
 
-    print("[AgriSaathi] Seeding demo crop lots with AI quality verification...")
+    print("[AgriSaathi] Seeding demo crop lots with verified produce photographs...")
 
     lots_data = [
         {
@@ -306,10 +325,10 @@ def _seed_demo_lots(farmer_id, fpo_id):
             'latitude': 20.1983, 'longitude': 73.8344,
             'address': 'Gat No. 45, Dindori Shivhar Road', 'village': 'Dindori', 'taluka': 'Dindori', 'pincode': '422202',
             'expected_price': 24.0, 'storage_status': 'NOT_STORED', 'status': 'ACTIVE',
-            'image_url': '/uploads/crop_lots/tomato_lot1_primary.jpg',
-            'secondary_img': '/uploads/crop_lots/tomato_lot1_closeup.jpg',
-            'ai_status': 'PASSED', 'ai_score': 0.95,
-            'signals': 'AI Visual Check: Bright crimson coloration, intact calyxes, uniform 45-50mm sizing. Zero rot or skin cracks.'
+            'image_url': 'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?w=600&auto=format&fit=crop',
+            'secondary_img': 'https://images.unsplash.com/photo-1546470427-0d4db154ceb7?w=600&auto=format&fit=crop',
+            'ai_status': 'PASSED', 'ai_score': None,
+            'signals': 'Technical Integrity Verified: High-resolution produce image, uniform sizing profile. Physical inspection required for final grade.'
         },
         {
             'seller_id': farmer_id, 'seller_type': 'FARMER', 'seller_name': 'Suresh Patil',
@@ -320,9 +339,9 @@ def _seed_demo_lots(farmer_id, fpo_id):
             'latitude': 20.2100, 'longitude': 73.8400,
             'address': 'Farm Gate Plot 12, Dindori Road', 'village': 'Dindori', 'taluka': 'Dindori', 'pincode': '422202',
             'expected_price': 1850.0, 'storage_status': 'IN_STORAGE', 'status': 'ACTIVE',
-            'image_url': '/uploads/crop_lots/onion_lot2_primary.jpg',
-            'ai_status': 'PASSED', 'ai_score': 0.92,
-            'signals': 'AI Visual Check: Well-cured outer paper skin, tight neck closure, consistent Nashik Red hue. No sprouting.'
+            'image_url': 'https://images.unsplash.com/photo-1618512496248-a07fe83aa8cb?w=600&auto=format&fit=crop',
+            'ai_status': 'PASSED', 'ai_score': None,
+            'signals': 'Technical Integrity Verified: Well-cured outer paper skin, tight neck closure, no visible sprouting. Physical inspection required for final grade.'
         },
         {
             'seller_id': farmer_id, 'seller_type': 'FARMER', 'seller_name': 'Suresh Patil',
@@ -333,9 +352,9 @@ def _seed_demo_lots(farmer_id, fpo_id):
             'latitude': 20.2050, 'longitude': 73.8250,
             'address': 'Vineyard Sector 3, Dindori', 'village': 'Dindori', 'taluka': 'Dindori', 'pincode': '422202',
             'expected_price': 55.0, 'storage_status': 'NOT_STORED', 'status': 'RESERVED',
-            'image_url': '/uploads/crop_lots/grapes_lot3_primary.jpg',
-            'ai_status': 'PASSED', 'ai_score': 0.89,
-            'signals': 'AI Visual Check: Berry size 16-18mm, natural powdery bloom intact. Minor berry sunburn on 2% of bunch.'
+            'image_url': 'https://images.unsplash.com/photo-1596363505729-4190a9506133?w=600&auto=format&fit=crop',
+            'ai_status': 'PASSED', 'ai_score': None,
+            'signals': 'Technical Integrity Verified: Berry size 16-18mm, intact natural bloom. Physical inspection required for final grade.'
         },
         {
             'seller_id': fpo_id, 'seller_type': 'FPO', 'seller_name': 'Sahyadri Farmers Producer Co. Ltd.',
@@ -346,9 +365,9 @@ def _seed_demo_lots(farmer_id, fpo_id):
             'latitude': 20.0050, 'longitude': 73.7900,
             'address': 'Sahyadri Aggregation Center, Dindori Road', 'village': 'Mohadi', 'taluka': 'Dindori', 'pincode': '422207',
             'expected_price': 85.0, 'storage_status': 'IN_STORAGE', 'status': 'ACTIVE',
-            'image_url': '/uploads/crop_lots/pomegranate_lot4_primary.jpg',
-            'ai_status': 'PASSED', 'ai_score': 0.96,
-            'signals': 'AI Visual Check: Deep ruby red skin, aril firmness optimal, export grade size (250g+ per fruit).'
+            'image_url': 'https://images.unsplash.com/photo-1615485290382-441e4d049cb5?w=600&auto=format&fit=crop',
+            'ai_status': 'PASSED', 'ai_score': None,
+            'signals': 'Technical Integrity Verified: Deep ruby red skin, export grade sizing. Physical inspection required for final grade.'
         },
         {
             'seller_id': farmer_id, 'seller_type': 'FARMER', 'seller_name': 'Suresh Patil',
@@ -359,9 +378,9 @@ def _seed_demo_lots(farmer_id, fpo_id):
             'latitude': 20.1983, 'longitude': 73.8344,
             'address': 'Gat No. 45, Dindori', 'village': 'Dindori', 'taluka': 'Dindori', 'pincode': '422202',
             'expected_price': 2200.0, 'storage_status': 'NOT_STORED', 'status': 'SOLD',
-            'image_url': '/uploads/crop_lots/tomato_lot1_primary.jpg',
-            'ai_status': 'PASSED', 'ai_score': 0.91,
-            'signals': 'AI Visual Check: Grain luster golden, low broken grain percentage.'
+            'image_url': 'https://images.unsplash.com/photo-1574323347407-f5e1ad6d020b?w=600&auto=format&fit=crop',
+            'ai_status': 'PASSED', 'ai_score': None,
+            'signals': 'Technical Integrity Verified: Golden grain luster, low broken grain percentage. Physical inspection required for final grade.'
         },
     ]
 

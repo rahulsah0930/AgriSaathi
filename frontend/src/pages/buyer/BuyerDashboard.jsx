@@ -64,12 +64,6 @@ export const getCropImage = (cropName, customUrl) => {
 
   if (!customUrl) return fallback;
 
-  const lowerUrl = customUrl.toLowerCase();
-  // Prevent tomato fallback images or default lot placeholders on non-tomato crops
-  if (!normCrop.includes('tomato') && (lowerUrl.includes('tomato') || lowerUrl.includes('default_lot'))) {
-    return fallback;
-  }
-
   // Check if it's an external URL or backend upload path
   if (customUrl.startsWith('http://') || customUrl.startsWith('https://')) {
     return customUrl;
@@ -1093,8 +1087,12 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '16px' }}>
             {filteredLots.map((lot) => {
               const qReport = lot.quality_report;
-              const aiStatus = qReport?.ai_verification_status || 'PASSED';
-              const aiScore = qReport?.ai_score ? Math.round(qReport.ai_score * 100) : 92;
+              const aiStatus = qReport?.ai_verification_status || 'VERIFIED';
+              const hasScore = typeof qReport?.ai_score === 'number' && !isNaN(qReport.ai_score);
+              const aiScore = hasScore ? Math.round(qReport.ai_score * 100) : null;
+              const badgeLabel = hasScore
+                ? `Visual Check: ${aiStatus} (${aiScore}% Heuristic)`
+                : (lot.image_url ? 'Image Integrity: Verified' : 'Quality: Pending Review');
 
               return (
                 <Card key={lot.id} style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -1164,7 +1162,7 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
                       </div>
                     )}
 
-                    {/* AI Visual Quality Verification Badge */}
+                    {/* Image Quality Verification Badge */}
                     <div
                       style={{
                         position: 'absolute',
@@ -1183,7 +1181,7 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
                       }}
                     >
                       <Sparkles size={12} color="#34d399" />
-                      <span>AI Visual Check: {aiStatus} ({aiScore}%)</span>
+                      <span>{badgeLabel}</span>
                     </div>
                   </div>
 
@@ -1929,8 +1927,12 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
           : [detailModalLot.image_url].filter(Boolean);
         const currentPhoto = photos[activePhotoIdx] || photos[0] || detailModalLot.image_url;
         const qReport = detailModalLot.quality_report;
-        const aiStatus = qReport?.ai_verification_status || 'PASSED';
-        const aiScore = qReport?.ai_score ? Math.round(qReport.ai_score * 100) : 92;
+        const aiStatus = qReport?.ai_verification_status || 'VERIFIED';
+        const hasScore = typeof qReport?.ai_score === 'number' && !isNaN(qReport.ai_score);
+        const aiScore = hasScore ? Math.round(qReport.ai_score * 100) : null;
+        const modalBannerTitle = hasScore
+          ? `Produce Quality Screening: ${aiStatus} (${aiScore}% Rule-Based Heuristic)`
+          : `Produce Image Integrity: Verified (${aiStatus})`;
 
         return (
           <Modal
@@ -2048,7 +2050,7 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
                   <span style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700, color: '#166534', fontSize: '0.9rem' }}>
-                    <Sparkles size={16} color="#16a34a" /> AI Visual Quality Screening: {aiStatus} ({aiScore}%)
+                    <Sparkles size={16} color="#16a34a" /> {modalBannerTitle}
                   </span>
                   <Badge variant="success">Audited Photo Evidence</Badge>
                 </div>
@@ -2058,7 +2060,7 @@ export const BuyerDashboard = ({ user, onNavigate, onLogout }) => {
                   <div><strong>Moisture:</strong> {detailModalLot.moisture_percentage || '12'}%</div>
                 </div>
                 <div style={{ marginTop: '8px', fontSize: '0.72rem', color: '#64748b', fontStyle: 'italic' }}>
-                  Disclaimer: AI-assisted visual screening evaluates surface condition, color uniformity, and basic visual defects. It is an advisory aid and not a substitute for statutory AGMARK or official government laboratory quality certification.
+                  Technical Verification: Automated checks confirm resolution, aspect ratio, and cryptographic content hash integrity. No trained computer-vision grading model is currently deployed in this prototype; produce grade and freshness should be physically inspected upon delivery.
                 </div>
               </div>
 

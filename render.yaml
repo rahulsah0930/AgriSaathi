@@ -19,7 +19,7 @@ services:
       - key: JWT_SECRET_KEY
         generateValue: true
       - key: FRONTEND_URL
-        sync: false
+        value: https://agri-saathi-sepia.vercel.app
       - key: DEMO_MODE
         value: "false"
       - key: STORAGE_PROVIDER

@@ -213,7 +213,7 @@ export const AdminDashboard = ({ user, onNavigate, onLogout }) => {
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
               <ShieldCheck size={26} color="#38bdf8" />
-              <h1 style={{ fontSize: '1.6rem', fontWeight: 800, margin: 0 }}>
+              <h1 style={{ fontSize: '1.6rem', fontWeight: 800, margin: 0, color: '#ffffff' }}>
                 Government Administration & Regulatory Oversight Portal
               </h1>
               <Badge variant="info" size="sm">Prototype Regulatory Authority</Badge>

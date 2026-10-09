@@ -20,6 +20,7 @@ import {
   Scale,
   ShieldCheck,
   AlertTriangle,
+  AlertCircle,
   ArrowRight,
   CheckCircle2,
   XCircle,

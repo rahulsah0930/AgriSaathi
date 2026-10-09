@@ -60,7 +60,7 @@ def create_app(config_class=Config):
     CORS(app, resources={
         r"/api/*": {
             "origins": allowed_origins,
-            "allow_headers": ["Content-Type", "Authorization"],
+            "allow_headers": ["Content-Type", "Authorization", "X-Requested-With", "Accept"],
             "methods": ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
         },
         r"/uploads/*": {"origins": allowed_origins}

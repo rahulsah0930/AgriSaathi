@@ -117,24 +117,39 @@ class Config:
     def get_cors_origins(cls):
         """
         Returns allowed CORS origins.
-        In production: strictly enforces configured FRONTEND_URL. No wildcard.
+        In production: includes configured FRONTEND_URL and authorized Vercel production domains.
         In development: allows local dev servers alongside FRONTEND_URL.
+        Strictly prevents wildcard '*' in production while allowing legitimate frontend apps.
         """
-        if cls.IS_PRODUCTION:
-            origins = []
-            if cls.FRONTEND_URL:
-                for item in cls.FRONTEND_URL.split(','):
-                    cleaned = item.strip().rstrip('/')
-                    if cleaned and cleaned not in origins:
-                        origins.append(cleaned)
-            return origins if origins else ['http://localhost:5173']
-        
-        origins = ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:3000', 'http://127.0.0.1:3000']
+        origins = []
         if cls.FRONTEND_URL:
             for item in cls.FRONTEND_URL.split(','):
                 cleaned = item.strip().rstrip('/')
                 if cleaned and cleaned not in origins:
                     origins.append(cleaned)
+
+        # Authorize explicit production frontend domains
+        vercel_origins = [
+            'https://agri-saathi-sepia.vercel.app',
+            'https://agrisaathi.vercel.app',
+        ]
+        for vo in vercel_origins:
+            if vo not in origins:
+                origins.append(vo)
+
+        if not cls.IS_PRODUCTION:
+            dev_origins = [
+                'http://localhost:5173',
+                'http://127.0.0.1:5173',
+                'http://localhost:3000',
+                'http://127.0.0.1:3000',
+                'http://localhost:4173',
+                'http://127.0.0.1:4173'
+            ]
+            for d in dev_origins:
+                if d not in origins:
+                    origins.append(d)
+
         return origins
 
     @classmethod

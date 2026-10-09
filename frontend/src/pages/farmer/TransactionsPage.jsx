@@ -3,11 +3,12 @@ import { Card, Button, Badge, StatusBadge, Modal, Input } from '../../components
 import { Package, Truck, CheckCircle2, ShieldCheck, MapPin, Eye, Clock, Phone, AlertCircle } from 'lucide-react';
 import api from '../../services/api';
 
-export const TransactionsPage = ({ user, onNavigate }) => {
+export const TransactionsPage = ({ user, onNavigate, focusLogistics = false }) => {
   const [transactions, setTransactions] = useState([]);
   const [logisticsMap, setLogisticsMap] = useState({});
   const [loading, setLoading] = useState(true);
   const [banner, setBanner] = useState(null);
+  const [logisticsTab, setLogisticsTab] = useState(focusLogistics ? 'ALL_LOGISTICS' : 'ALL');
 
   // Transport Request Modal
   const [requestModalTxn, setRequestModalTxn] = useState(null);
@@ -110,21 +111,80 @@ export const TransactionsPage = ({ user, onNavigate }) => {
     return currentIndex >= stepIndex && currentIndex !== -1 && stepIndex !== -1;
   };
 
+  const displayedTransactions = transactions.filter((txn) => {
+    const transportOrder = logisticsMap[txn.id];
+    if (logisticsTab === 'ALL') return true;
+    if (logisticsTab === 'ALL_LOGISTICS') {
+      return Boolean(transportOrder) || ['READY_FOR_LOGISTICS', 'IN_DELIVERY', 'DELIVERED'].includes(txn.status);
+    }
+    if (logisticsTab === 'READY') {
+      return txn.status === 'READY_FOR_LOGISTICS' && !transportOrder;
+    }
+    if (logisticsTab === 'ACTIVE_DISPATCH') {
+      return transportOrder && ['REQUESTED', 'ASSIGNED', 'PICKUP_SCHEDULED', 'PICKED_UP', 'IN_TRANSIT'].includes(transportOrder.status);
+    }
+    if (logisticsTab === 'DELIVERED') {
+      return (transportOrder && transportOrder.status === 'DELIVERED') || txn.status === 'DELIVERED';
+    }
+    return true;
+  });
+
   return (
     <div style={{ maxWidth: '1100px', margin: '0 auto', padding: '16px' }}>
-      <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
         <div>
-          <h1 style={{ fontSize: '1.6rem', fontWeight: 800, margin: 0, color: 'var(--slate-900)' }}>
-            Contract Fulfillment & Orders
-          </h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            {focusLogistics && <Truck size={26} color="var(--primary-700)" />}
+            <h1 style={{ fontSize: '1.6rem', fontWeight: 800, margin: 0, color: 'var(--slate-900)' }}>
+              {focusLogistics ? 'Agricultural Logistics & Consignment Network' : 'Contract Fulfillment & Orders'}
+            </h1>
+          </div>
           <p style={{ color: 'var(--slate-600)', margin: '4px 0 0', fontSize: '0.9rem' }}>
-            Unified live fulfillment, simulated escrow hold, and verified logistics dispatch
+            {focusLogistics
+              ? 'Farmgate pickup scheduling, transporter fleet allocation, live status tracking, and Proof of Delivery (POD)'
+              : 'Unified live fulfillment, simulated escrow hold, and verified logistics dispatch'}
           </p>
         </div>
 
-        <Badge variant="info" size="lg">
-          Protected by Prototype Escrow
-        </Badge>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <Badge variant="info" size="lg">
+            {focusLogistics ? 'Verified Fleet Network' : 'Protected by Prototype Escrow'}
+          </Badge>
+          {focusLogistics && (
+            <Button variant="outline-primary" size="sm" onClick={() => onNavigate && onNavigate('dashboard')}>
+              ← Dashboard
+            </Button>
+          )}
+        </div>
+      </div>
+
+      {/* Filter Tabs */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '16px', flexWrap: 'wrap' }}>
+        {[
+          { id: focusLogistics ? 'ALL_LOGISTICS' : 'ALL', label: focusLogistics ? 'All Transport Orders' : 'All Contracts' },
+          { id: 'READY', label: 'Ready for Transport' },
+          { id: 'ACTIVE_DISPATCH', label: 'In Transit / Dispatched' },
+          { id: 'DELIVERED', label: 'Delivered (POD Available)' },
+          ...(focusLogistics ? [{ id: 'ALL', label: 'All Orders' }] : []),
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setLogisticsTab(tab.id)}
+            style={{
+              padding: '6px 14px',
+              borderRadius: '20px',
+              fontSize: '0.82rem',
+              fontWeight: logisticsTab === tab.id ? 700 : 500,
+              border: `1px solid ${logisticsTab === tab.id ? 'var(--primary-700)' : 'var(--border-color)'}`,
+              backgroundColor: logisticsTab === tab.id ? 'var(--primary-700)' : '#ffffff',
+              color: logisticsTab === tab.id ? '#ffffff' : 'var(--slate-700)',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       {banner && (
@@ -147,23 +207,36 @@ export const TransactionsPage = ({ user, onNavigate }) => {
       )}
 
       {loading ? (
-        <div style={{ textAlign: 'center', padding: '40px' }}>Loading contracts...</div>
-      ) : transactions.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: '40px' }}>Loading contracts and logistics orders...</div>
+      ) : displayedTransactions.length === 0 ? (
         <Card style={{ textAlign: 'center', padding: '48px 24px' }}>
-          <Package size={48} color="var(--slate-400)" style={{ margin: '0 auto 16px' }} />
+          {focusLogistics ? (
+            <Truck size={48} color="var(--slate-400)" style={{ margin: '0 auto 16px' }} />
+          ) : (
+            <Package size={48} color="var(--slate-400)" style={{ margin: '0 auto 16px' }} />
+          )}
           <h3 style={{ fontSize: '1.2rem', fontWeight: 700, color: 'var(--slate-800)', marginBottom: '8px' }}>
-            No Active Contracts Yet
+            {focusLogistics ? 'No Logistics Consignments In This View' : 'No Active Contracts Yet'}
           </h3>
           <p style={{ color: 'var(--slate-600)', maxWidth: '480px', margin: '0 auto 20px' }}>
-            When a buyer offer is agreed and accepted, it is automatically converted into an official contract order here.
+            {focusLogistics
+              ? 'When a contract order reaches "Ready for Logistics" after buyer advance deposit, transport requests can be dispatched to verified commercial transporters.'
+              : 'When a buyer offer is agreed and accepted, it is automatically converted into an official contract order here.'}
           </p>
-          <Button variant="primary" onClick={() => onNavigate && onNavigate('dashboard')}>
-            Back to Dashboard
-          </Button>
+          <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
+            {logisticsTab !== (focusLogistics ? 'ALL_LOGISTICS' : 'ALL') && (
+              <Button variant="outline-primary" onClick={() => setLogisticsTab(focusLogistics ? 'ALL_LOGISTICS' : 'ALL')}>
+                View All Consignments
+              </Button>
+            )}
+            <Button variant="primary" onClick={() => onNavigate && onNavigate('dashboard')}>
+              Back to Dashboard
+            </Button>
+          </div>
         </Card>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-          {transactions.map((txn) => {
+          {displayedTransactions.map((txn) => {
             const isSeller = user?.role === 'FARMER' || user?.role === 'FPO';
             const isBuyer = user?.role === 'BUYER';
             const transportOrder = logisticsMap[txn.id];

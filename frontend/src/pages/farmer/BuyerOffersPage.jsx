@@ -82,7 +82,7 @@ export const BuyerOffersPage = ({ user, onNavigate }) => {
     if (!activeOffer) return;
     setIsAccepting(true);
     try {
-      const res = await api.patch(`/api/offers/${activeOffer.id}/accept`);
+      const res = await api.post(`/api/offers/${activeOffer.id}/accept`);
       if (res.success) {
         setActionFeedback({
           type: 'success',
@@ -104,7 +104,7 @@ export const BuyerOffersPage = ({ user, onNavigate }) => {
       return;
     }
     try {
-      const res = await api.patch(`/api/offers/${offer.id}/reject`);
+      const res = await api.post(`/api/offers/${offer.id}/reject`);
       if (res.success) {
         setActionFeedback({
           type: 'info',
@@ -133,7 +133,7 @@ export const BuyerOffersPage = ({ user, onNavigate }) => {
 
     setIsSubmittingCounter(true);
     try {
-      const res = await api.patch(`/api/offers/${activeOffer.id}/counter`, {
+      const res = await api.post(`/api/offers/${activeOffer.id}/counter`, {
         counter_price: parseFloat(counterPrice),
         counter_message: counterMessage,
       });
